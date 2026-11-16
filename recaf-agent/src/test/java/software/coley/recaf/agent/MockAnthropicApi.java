@@ -36,6 +36,7 @@ final class MockAnthropicApi implements AutoCloseable {
 	MockAnthropicApi() throws IOException {
 		server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		server.createContext("/v1/messages", this::handle);
+		server.createContext("/v1/models", this::handleModels);
 		server.setExecutor(Executors.newCachedThreadPool());
 		server.start();
 	}
@@ -73,6 +74,26 @@ final class MockAnthropicApi implements AutoCloseable {
 
 	static Block toolUse(String id, String name, String inputJson) {
 		return new Block("tool_use", inputJson, id, name);
+	}
+
+	/** Status the model list answers with. */
+	int modelsStatus = 200;
+
+	private void handleModels(HttpExchange exchange) throws IOException {
+		exchange.getRequestBody().readAllBytes();
+		String body = modelsStatus == 200 ?
+				"{\"data\":[" +
+						"{\"type\":\"model\",\"id\":\"claude-opus-5-5\",\"display_name\":\"Claude Opus 5.5\",\"created_at\":\"2026-09-01T00:00:00Z\"}," +
+						"{\"type\":\"model\",\"id\":\"claude-haiku-5-5\",\"display_name\":\"Claude Haiku 5.5\",\"created_at\":\"2026-08-01T00:00:00Z\"}" +
+						"],\"has_more\":false,\"first_id\":\"claude-opus-5-5\",\"last_id\":\"claude-haiku-5-5\"}" :
+				"{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}";
+		byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+		exchange.getResponseHeaders().add("Content-Type", "application/json");
+		exchange.getResponseHeaders().add("x-should-retry", "false");
+		exchange.sendResponseHeaders(modelsStatus, bytes.length);
+		try (OutputStream out = exchange.getResponseBody()) {
+			out.write(bytes);
+		}
 	}
 
 	private void handle(HttpExchange exchange) throws IOException {

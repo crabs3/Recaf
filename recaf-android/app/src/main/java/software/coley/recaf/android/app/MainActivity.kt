@@ -55,6 +55,7 @@ sealed interface Screen {
 	data object Mcp : Screen
 	data object Settings : Screen
 	data object Apps : Screen
+	data object Onboarding : Screen
 }
 
 /** Back stack of [Screen]s. The agent chat is always at the bottom. */
@@ -131,6 +132,13 @@ private fun App(navigator: Navigator) {
 	val openFailure by RecafSession.openFailure.collectAsStateWithLifecycle()
 	var crashReport by remember { mutableStateOf(CrashLog.pendingReport()) }
 
+	// The first start begins with setting up what the agent runs on.
+	LaunchedEffect(Unit) {
+		val settings = SettingsStore.settings.value
+		if (!settings.onboarded && !settings.agentReady)
+			navigator.go(Screen.Onboarding)
+	}
+
 	// A background task that failed is reported, the app keeps running.
 	LaunchedEffect(Unit) {
 		CrashLog.backgroundFailure.collect { failure ->
@@ -142,7 +150,7 @@ private fun App(navigator: Navigator) {
 		}
 	}
 
-	BackHandler(enabled = navigator.canGoBack && opening == null) { navigator.back() }
+	BackHandler(enabled = navigator.canGoBack && opening == null && navigator.current != Screen.Onboarding) { navigator.back() }
 	when (val screen = navigator.current) {
 		Screen.Chat -> ChatScreen(navigator, agent)
 		Screen.Browser -> BrowserScreen(navigator)
@@ -154,6 +162,7 @@ private fun App(navigator: Navigator) {
 		Screen.Mcp -> McpScreen(navigator)
 		Screen.Settings -> SettingsScreen(navigator)
 		Screen.Apps -> AppsScreen(navigator)
+		Screen.Onboarding -> OnboardingScreen(navigator)
 	}
 
 	// Opening a file can take a while and needs most of the app's memory, so nothing else goes on meanwhile.

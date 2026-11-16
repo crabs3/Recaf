@@ -12,6 +12,7 @@ dependencies {
     api project(':recaf-core')
     api(libs.anthropic)
     api(libs.rhino)
+    implementation(libs.okhttp)
 
     testImplementation(testFixtures(project(':recaf-core')))
 }

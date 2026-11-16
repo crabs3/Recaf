@@ -15,7 +15,9 @@ import software.coley.recaf.agent.chat.ApprovalMode
 import software.coley.recaf.agent.claude.AgentConfig
 import software.coley.recaf.agent.chat.AgentListener
 import software.coley.recaf.agent.chat.AgentTurn
+import software.coley.recaf.agent.chat.ChatAgent
 import software.coley.recaf.agent.claude.ClaudeAgent
+import software.coley.recaf.agent.openai.OpenAiAgent
 import software.coley.recaf.agent.chat.ToolApprover
 import software.coley.recaf.agent.tool.AgentTool
 import software.coley.recaf.agent.tool.ToolArgs
@@ -67,8 +69,9 @@ class ApprovalRequest(val tool: AgentTool, val arguments: ToolArgs, val decision
  */
 class AgentViewModel(application: Application) : AndroidViewModel(application) {
 	private val main = Handler(Looper.getMainLooper())
-	private var agent: ClaudeAgent? = null
-	private var agentSettings: Settings? = null
+	private var agent: ChatAgent? = null
+	/** Configuration the current agent was built with. A change of it means a new agent is needed. */
+	private var agentConfig: Any? = null
 	private var allowChangesForConversation = false
 
 	val items = mutableStateListOf<ChatItem>()
@@ -158,16 +161,16 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 	fun newConversation() {
 		if (running) return
 		agent = null
-		agentSettings = null
+		agentConfig = null
 		allowChangesForConversation = false
 		items.clear()
 		usage = null
 	}
 
-	private fun run(action: (ClaudeAgent) -> AgentTurn) {
+	private fun run(action: (ChatAgent) -> AgentTurn) {
 		val settings = SettingsStore.settings.value
-		if (settings.apiKey.isBlank()) {
-			items.add(ChatItem.Notice("Add your Anthropic API key in Settings to use the agent.", error = true, canResume = false))
+		settings.missing?.let {
+			items.add(ChatItem.Notice(it, error = true, canResume = false))
 			return
 		}
 		running = true
@@ -186,17 +189,31 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
 	/**
 	 * @return The agent for the current settings. When settings that the agent is built with change mid
-	 * conversation, a new agent takes over the conversation so far.
+	 * conversation, a new agent takes over. It carries the conversation on if it talks to the same kind of API.
+	 * The two kinds keep conversations in formats of their own, so a switch between them starts afresh.
 	 */
-	private fun agentFor(settings: Settings): ClaudeAgent {
+	private fun agentFor(settings: Settings): ChatAgent {
+		val config: Any = when (settings.provider) {
+			Provider.CLAUDE -> settings.agentConfig()
+			Provider.OPENAI -> settings.openAiConfig()
+		}
 		val current = agent
-		if (current != null && agentSettings?.agentConfig() == settings.agentConfig())
+		if (current != null && agentConfig == config)
 			return current
-		val replacement = ClaudeAgent(RecafSession.toolbox, settings.agentConfig(), listener, approver)
-		if (current != null)
-			replacement.importConversation(current.exportConversation())
+		val replacement: ChatAgent = when (settings.provider) {
+			Provider.CLAUDE -> ClaudeAgent(RecafSession.toolbox, settings.agentConfig(), listener, approver)
+			Provider.OPENAI -> OpenAiAgent(RecafSession.toolbox, settings.openAiConfig(), listener, approver)
+		}
+		if (current != null && current.messageCount() > 0) {
+			if (current.javaClass == replacement.javaClass) {
+				replacement.importConversation(current.exportConversation())
+			} else onMain {
+				items.add(ChatItem.Notice("Now using ${settings.modelLabel}. It has not seen the conversation so far.",
+					error = false, canResume = false))
+			}
+		}
 		agent = replacement
-		agentSettings = settings
+		agentConfig = config
 		return replacement
 	}
 

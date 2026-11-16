@@ -3,6 +3,7 @@ package software.coley.recaf.android;
 import software.coley.android.xml.XmlDecoder;
 import jakarta.enterprise.inject.Instance;
 import software.coley.recaf.Bootstrap;
+import software.coley.recaf.android.compat.FileOffload;
 import software.coley.recaf.Recaf;
 import software.coley.recaf.info.AndroidClassInfo;
 import software.coley.recaf.info.BinaryXmlFileInfo;
@@ -28,10 +29,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Checks of the Android build of Recaf's core that are shared between the host JVM unit tests and the on-device
@@ -179,6 +184,97 @@ public final class CoreChecks {
 		String xml = XmlDecoder.decode(((BinaryXmlFileInfo) manifest).getChunkModel(), AndroidRes.getAndroidBase(), null);
 		check(xml.contains("android.permission.READ_CONTACTS"), "Unexpected manifest: " + xml);
 		check(xml.contains("sample.app"), "Unexpected manifest: " + xml);
+	}
+
+	/**
+	 * Memory handling of the Android build: the code of a DEX class is fetched from the file again after it was
+	 * let go, and large resource files are read back from the archive instead of being held.
+	 *
+	 * @param underMemoryPressure
+	 *        {@code true} to also exhaust memory in between, which makes the runtime drop what it only holds
+	 * 		softly. Left out on a device, where running out of memory disturbs more than this check.
+	 */
+	public static void codeAndLargeFilesAreFetchedOnDemand(boolean underMemoryPressure) throws Exception {
+		// A DEX class does not keep its definition. Asking twice gives two equal definitions, and still works
+		// after everything that is only softly held was dropped.
+		Workspace apk = openSample("sample.apk");
+		ClassPathNode path = apk.findAndroidClass("sample/app/MainActivity");
+		check(path != null, "Missing Android class sample/app/MainActivity");
+		AndroidClassInfo activity = path.getValue().asAndroidClass();
+		int methods = activity.getBackingDefinition().getMethods().size();
+		check(methods > 0 && methods == activity.getMethods().size(), "Outline and definition disagree: " + methods);
+		if (underMemoryPressure)
+			clearSoftReferences();
+		check(activity.getBackingDefinition().getMethods().size() == methods, "The definition could not be fetched again");
+		check(activity.asJvmClass().getMethods().size() == methods, "The JVM translation could not be made again");
+
+		// An archive with a large native library, a large blob, a large text file and a small file.
+		byte[] library = new byte[200_000];
+		for (int i = 0; i < library.length; i++)
+			library[i] = (byte) (i * 17 + (i >>> 7));
+		byte[] elfHeader = {0x7F, 'E', 'L', 'F', 2, 1, 1, 0};
+		System.arraycopy(elfHeader, 0, library, 0, elfHeader.length);
+		byte[] blob = new byte[300_000];
+		for (int i = 0; i < blob.length; i++)
+			blob[i] = (byte) (i * 31 + (i >>> 8));
+		// Varied enough that the importer does not take the entry for a decompression bomb and leave it out.
+		StringBuilder lines = new StringBuilder();
+		for (int i = 0; i < 6_000; i++)
+			lines.append("line ").append(i).append(": ").append(Integer.toHexString(i * 0x9E3779B1)).append(' ')
+					.append(Long.toString(i * 2862933555777941757L, 36)).append('\n');
+		byte[] text = lines.toString().getBytes(StandardCharsets.UTF_8);
+		byte[] small = {1, 2, 3, 4};
+		Path archive = workDir.resolve("samples").resolve("resources.zip");
+		try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archive))) {
+			for (Object[] entry : new Object[][]{{"lib/arm64-v8a/libnative.so", library}, {"assets/data.bin", blob},
+					{"assets/notes.txt", text}, {"assets/small.bin", small}}) {
+				zip.putNextEntry(new ZipEntry((String) entry[0]));
+				zip.write((byte[]) entry[1]);
+				zip.closeEntry();
+			}
+		}
+
+		FileOffload.begin(archive, 64 * 1024);
+		Workspace workspace;
+		FileOffload.Summary summary;
+		try {
+			workspace = new BasicWorkspace(recaf.get(ResourceImporter.class).importResource(archive));
+		} finally {
+			summary = FileOffload.end();
+		}
+		check(recaf.get(WorkspaceManager.class).setCurrent(workspace), "Workspace was not accepted as current");
+		// The library and the blob are read back, the text and the small file stay in memory.
+		check(summary != null && summary.files() == 2 && summary.bytes() == library.length + blob.length,
+				"Unexpected files kept out of memory: " + summary);
+		for (Object[] entry : new Object[][]{{"lib/arm64-v8a/libnative.so", library}, {"assets/data.bin", blob},
+				{"assets/notes.txt", text}, {"assets/small.bin", small}}) {
+			FilePathNode file = workspace.findFile((String) entry[0]);
+			check(file != null, "Missing file " + entry[0] + ", the workspace has: " +
+					workspace.getPrimaryResource().getFileBundle().keySet() + " and embedded " +
+					workspace.getPrimaryResource().getEmbeddedResources().keySet());
+			check(Arrays.equals(file.getValue().getRawContent(), (byte[]) entry[1]), "Content of " + entry[0] + " differs");
+		}
+		if (underMemoryPressure)
+			clearSoftReferences();
+		check(Arrays.equals(workspace.findFile("assets/data.bin").getValue().getRawContent(), blob), "Content differs when read again");
+
+		// Files created outside of an import keep their content.
+		check(FileOffload.offer("assets/data.bin", blob, software.coley.recaf.info.BasicFileInfo.class) == null,
+				"Content was offered for offloading outside of an import");
+	}
+
+	/**
+	 * Uses up the memory there is, which is when a runtime drops what is only softly referenced.
+	 */
+	private static void clearSoftReferences() {
+		try {
+			List<byte[]> hog = new ArrayList<>();
+			while (true)
+				hog.add(new byte[16 << 20]);
+		} catch (OutOfMemoryError expected) {
+			// The allocations above are garbage from here on.
+		}
+		System.gc();
 	}
 
 	private static String describe(Throwable t) {

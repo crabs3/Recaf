@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- Debug builds only: lets the agent talk to a plain-HTTP test endpoint on this device or on the emulator's host. -->
-    <application android:networkSecurityConfig="@xml/debug_network_security" />
-</manifest>

@@ -7,7 +7,7 @@ to outside clients through a built-in MCP server.
 
 | Module | What it is |
 | --- | --- |
-| `../recaf-agent` | Plain Java, shared by desktop and Android: the tool set, the Claude agent, the MCP server, the script sandbox and a command line entry point. |
+| `../recaf-agent` | Plain Java, shared by desktop and Android: the tool set, the agents (one for Claude through the Anthropic SDK, one for OpenAI-compatible APIs), the MCP server, the script sandbox and a command line entry point. |
 | `core` | `recaf-core` built as an Android library. The desktop sources are reused, not forked. |
 | `app` | The application: agent chat, workspace browser, class viewer and editor, tool forms, findings, MCP and settings screens. |
 
@@ -41,23 +41,41 @@ cd .. && ./gradlew :recaf-agent:test         # the full tool, agent and MCP suit
 with Recaf from another app. Supported inputs are whatever Recaf imports: JAR, WAR, class, DEX, APK, ZIP
 and so on.
 
-**Ask the agent.** Put an Anthropic API key in Settings (it is encrypted with the Android Keystore), then
-type a question or start one of the ready-made tasks: full analysis, quick triage, secret hunt,
-deobfuscation, Android audit. The agent's tool calls are shown inline and can be expanded, findings it
+**Connect a model.** The first start asks what the agent should run on:
+
+- *Claude.* Sign in to the Claude Console from the setup screen, create an API key and paste it. Recaf checks
+  the key and lists the models it can use. Claude offers no sign-in for other apps, so the key is how an
+  app connects; usage is billed to the Console account.
+- *An OpenAI-compatible API.* OpenAI, a gateway such as OpenRouter, or a model server such as Ollama,
+  LM Studio or vLLM. Enter the address (there are presets), a key if the server wants one, and pick from the
+  models Recaf fetches from it. The model has to support tool calling, and needs room for the tool
+  definitions: a context window of 32k tokens or more.
+- *Neither.* Browsing, decompiling and the tools work without a model.
+
+Keys are encrypted with the Android Keystore. Plain HTTP addresses are accepted, for servers on your own
+network, and marked as unencrypted.
+
+**Ask the agent.** Type a question or start one of the ready-made tasks: full analysis, quick triage, secret
+hunt, deobfuscation, Android audit. The agent's tool calls are shown inline and can be expanded, findings it
 records are collected on their own screen, and changes it wants to make wait for your approval unless you
 switch that off. A run can be stopped at any time and continued afterwards. It keeps going while the app is in
 the background, with a notification that can stop it.
 
 Agent settings:
 
-- *Model.* Defaults to `claude-opus-5-5`.
-- *Effort.* How thoroughly the agent works. Defaults to medium.
+- *Provider and model.* Claude defaults to `claude-opus-5-5`. Switching provider mid conversation starts the
+  new model without the earlier messages, the two kinds of API keep conversations in different formats.
+- *Effort.* Claude only. How thoroughly the agent works. Defaults to medium.
 - *Changes.* Ask before each change (default), allow changes, or read-only. Recording findings never
   needs approval.
 - *Retry on another model.* On by default. When a model's safety filters decline a request, which
   happens with reverse engineering questions, the API answers with another model instead. The chat says
   when that happened.
-- *API endpoint.* Empty by default, which means Anthropic's API. Set it when requests go through a gateway.
+- *API endpoint.* Claude only. Empty by default, which means Anthropic's API. Set it when requests go through
+  a gateway that speaks Anthropic's format.
+
+If the app closes unexpectedly, the next start offers a report of what happened, and Settings can copy what
+was recorded about failures the app survived. Nothing of it leaves the device unless you share it.
 
 **Do it by hand.** The browser lists packages, classes and files with search. A class opens decompiled
 (CFR, Procyon or Vineflower), as bytecode, or as a structure outline; the bytecode view can be edited and
@@ -109,6 +127,8 @@ alive while the app is in the background.
 ./gradlew :recaf-agent:run --args="app.apk --analyze android-audit"
 ./gradlew :recaf-agent:run --args="app.jar --ask 'What does it do on startup?'"
 ./gradlew :recaf-agent:run --args="app.jar --mcp --port 8765"
+./gradlew :recaf-agent:run --args="--list-models --provider openai --base-url http://localhost:11434/v1"
+./gradlew :recaf-agent:run --args="app.jar --analyze --provider openai --base-url http://localhost:11434/v1 --model qwen3"
 ```
 
 `--help` lists the options. The agent reads only, unless `--allow-changes` is passed.
@@ -133,6 +153,12 @@ What stands in for the missing pieces:
 - *`java.lang.foreign`.* A small shim over `ByteBuffer` for the ZIP reader.
 - *The runtime's own classes.* Android has no class files for its platform classes, so the classes that
   decompilers and the assembler ask about are synthesized from reflection.
+- *Memory.* An Android app gets around 512 MB. Desktop Recaf keeps the expanded code of every DEX class in
+  memory, about forty times the size of the DEX file. The Android build keeps an outline per class and reads
+  the code of a class from the file when something looks at it (`DexClassSource`). An 11 MB APK that took
+  210 MB takes about 22 MB this way. Opening a file that still does not fit ends with a message, not a crash.
+- *Stacks.* Decompilers recurse deeper than an Android thread's default stack allows, so Recaf's worker
+  threads get a large one.
 
 ## Limitations
 
@@ -143,5 +169,9 @@ What stands in for the missing pieces:
   parameters. Renaming in JARs works. Transformers and `detect_anti_reversal` are JVM-only.
 - Exported APKs are not signed. Only the base APK of an installed split app is opened.
 - A conversation lives as long as the app process.
+- Memory still bounds what can be opened. Resources are held in memory in full, and every class keeps its
+  outline, so an app with hundreds of megabytes of assets or well over a hundred thousand classes may not fit.
 - Large APKs take a while to import on a phone, and much longer on an emulator without hardware
   acceleration.
+- With an OpenAI-compatible API, how well the agent works depends on the model. Small local models often
+  produce malformed tool calls, which are reported back to them, or lose track over long tasks.

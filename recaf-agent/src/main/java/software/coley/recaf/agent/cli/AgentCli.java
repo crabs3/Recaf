@@ -5,11 +5,17 @@ import jakarta.annotation.Nullable;
 import software.coley.recaf.Bootstrap;
 import software.coley.recaf.Recaf;
 import software.coley.recaf.agent.chat.ApprovalMode;
+import software.coley.recaf.agent.chat.ChatAgent;
+import software.coley.recaf.agent.chat.ModelInfo;
 import software.coley.recaf.agent.claude.AgentConfig;
 import software.coley.recaf.agent.chat.AgentListener;
 import software.coley.recaf.agent.chat.AgentTurn;
 import software.coley.recaf.agent.claude.ClaudeAgent;
 import software.coley.recaf.agent.claude.ClaudeModel;
+import software.coley.recaf.agent.claude.ClaudeModels;
+import software.coley.recaf.agent.openai.OpenAiAgent;
+import software.coley.recaf.agent.openai.OpenAiClient;
+import software.coley.recaf.agent.openai.OpenAiConfig;
 import software.coley.recaf.agent.mcp.McpHttpServer;
 import software.coley.recaf.agent.mcp.McpServer;
 import software.coley.recaf.agent.prompt.Playbook;
@@ -46,13 +52,17 @@ public final class AgentCli implements AutoCloseable {
 	private static final String USAGE = """
 			Usage: recaf-agent <input file> [options]
 
-			Analysis with the Claude agent (needs ANTHROPIC_API_KEY):
+			Analysis with the agent:
 			  --analyze [task]        Run a ready-made analysis and print its report. Tasks: %s
 			                          Default task: analyze
 			  --ask <prompt>          Run the agent with your own prompt
-			  --model <id>            Model to use. Default: %s
-			  --effort <level>        low, medium, high, xhigh or max. Default: %s
-			  --base-url <url>        API endpoint, for gateways. Default: ANTHROPIC_BASE_URL, else Anthropic's API
+			  --provider <name>       claude (default, needs ANTHROPIC_API_KEY) or openai, for any API that follows
+			                          OpenAI's chat completions format (key, if needed, from OPENAI_API_KEY)
+			  --model <id>            Model to use. Default with claude: %s. Required with openai
+			  --effort <level>        claude only: low, medium, high, xhigh or max. Default: %s
+			  --base-url <url>        API address. claude: ANTHROPIC_BASE_URL, else Anthropic's API.
+			                          openai: OPENAI_BASE_URL, else https://api.openai.com/v1
+			  --list-models           Print the models the API offers and exit. Needs no input file
 			  --allow-changes         Let the agent modify the workspace. Without it the agent only reads
 			  --export <file name>    After the agent finishes, export the workspace into the export directory
 
@@ -96,6 +106,16 @@ public final class AgentCli implements AutoCloseable {
 		}
 		if (options.help) {
 			System.out.println(usage());
+			return;
+		}
+		if (options.listModels) {
+			try {
+				for (ModelInfo model : listModels(options))
+					System.out.println(model.id() + (model.name().equals(model.id()) ? "" : "  (" + model.name() + ")"));
+			} catch (IOException ex) {
+				System.err.println(ex.getMessage());
+				System.exit(1);
+			}
 			return;
 		}
 
@@ -157,14 +177,8 @@ public final class AgentCli implements AutoCloseable {
 	 * @return {@code true} when the agent finished its work.
 	 */
 	public boolean runAgent() {
-		String apiKey = options.apiKey;
-		if (apiKey == null || apiKey.isBlank()) {
-			out.println("Set the ANTHROPIC_API_KEY environment variable to run the agent.");
-			return false;
-		}
-		AgentConfig config = new AgentConfig(apiKey, options.baseUrl, options.model, options.effort, AgentConfig.DEFAULT_MAX_TOKENS, true,
-				options.allowChanges ? ApprovalMode.ALLOW_CHANGES : ApprovalMode.READ_ONLY);
-		ClaudeAgent agent = new ClaudeAgent(toolbox, config, new AgentListener() {
+		ApprovalMode approvalMode = options.allowChanges ? ApprovalMode.ALLOW_CHANGES : ApprovalMode.READ_ONLY;
+		AgentListener listener = new AgentListener() {
 			private boolean midLine;
 
 			@Override
@@ -192,7 +206,25 @@ public final class AgentCli implements AutoCloseable {
 			public void onModelFallback(@Nonnull String fromModel, @Nonnull String toModel) {
 				System.err.println("  ! " + fromModel + " declined this request, " + toModel + " answered instead");
 			}
-		}, null);
+		};
+
+		ChatAgent agent;
+		if (options.openAi) {
+			if (options.model == null || options.model.isBlank()) {
+				out.println("Name the model to use with --model. --list-models shows what the API offers.");
+				return false;
+			}
+			agent = new OpenAiAgent(toolbox, new OpenAiConfig(options.resolvedBaseUrl(), options.apiKey, options.model, approvalMode), listener, null);
+		} else {
+			String apiKey = options.apiKey;
+			if (apiKey == null || apiKey.isBlank()) {
+				out.println("Set the ANTHROPIC_API_KEY environment variable to run the agent.");
+				return false;
+			}
+			String model = options.model == null ? ClaudeModel.DEFAULT.id() : options.model;
+			agent = new ClaudeAgent(toolbox, new AgentConfig(apiKey, options.baseUrl, model, options.effort,
+					AgentConfig.DEFAULT_MAX_TOKENS, true, approvalMode), listener, null);
+		}
 
 		AgentTurn turn = agent.send(options.prompt);
 		out.println();
@@ -235,6 +267,24 @@ public final class AgentCli implements AutoCloseable {
 			mcpServer.close();
 	}
 
+	/**
+	 * @param options
+	 * 		Parsed command line.
+	 *
+	 * @return Models the configured API offers.
+	 *
+	 * @throws IOException
+	 * 		When the API cannot be asked. The message says why.
+	 */
+	@Nonnull
+	public static List<ModelInfo> listModels(@Nonnull Options options) throws IOException {
+		if (options.openAi)
+			return new OpenAiClient(options.resolvedBaseUrl(), options.apiKey).listModels().models();
+		if (options.apiKey == null || options.apiKey.isBlank())
+			throw new IOException("Set the ANTHROPIC_API_KEY environment variable to list the models.");
+		return ClaudeModels.list(options.apiKey, options.baseUrl);
+	}
+
 	@Nonnull
 	private static String usage() {
 		List<String> tasks = new ArrayList<>();
@@ -258,14 +308,23 @@ public final class AgentCli implements AutoCloseable {
 		Path input;
 		Path exportDir = Paths.get("recaf-exports");
 		String prompt;
-		String model = ClaudeModel.DEFAULT.id();
+		String model;
 		String effort = AgentConfig.DEFAULT_EFFORT;
-		String apiKey = System.getenv("ANTHROPIC_API_KEY");
-		String baseUrl = System.getenv("ANTHROPIC_BASE_URL");
+		String apiKey;
+		String baseUrl;
+		boolean openAi, listModels;
 		String exportName;
 		String token;
 		int port = McpHttpServer.DEFAULT_PORT;
 		boolean mcp, network, allowChanges, unrestrictedScripts, help;
+
+		/**
+		 * @return Address of the OpenAI-compatible API to use.
+		 */
+		@Nonnull
+		String resolvedBaseUrl() {
+			return baseUrl == null || baseUrl.isBlank() ? "https://api.openai.com/v1" : baseUrl;
+		}
 
 		/**
 		 * @param apiKey
@@ -301,6 +360,15 @@ public final class AgentCli implements AutoCloseable {
 					case "--unrestricted-scripts" -> options.unrestrictedScripts = true;
 					case "--port" -> options.port = parsePort(value(args, ++i, arg));
 					case "--token" -> options.token = value(args, ++i, arg);
+					case "--list-models" -> options.listModels = true;
+					case "--provider" -> {
+						String provider = value(args, ++i, arg).toLowerCase();
+						switch (provider) {
+							case "claude", "anthropic" -> options.openAi = false;
+							case "openai", "openai-compatible" -> options.openAi = true;
+							default -> throw new IllegalArgumentException("Unknown provider '" + provider + "', use claude or openai");
+						}
+					}
 					case "--model" -> options.model = value(args, ++i, arg);
 					case "--effort" -> options.effort = value(args, ++i, arg);
 					case "--base-url" -> options.baseUrl = value(args, ++i, arg);
@@ -323,7 +391,11 @@ public final class AgentCli implements AutoCloseable {
 					}
 				}
 			}
-			if (options.help)
+			// Credentials and addresses come from the environment of the provider that was chosen.
+			options.apiKey = System.getenv(options.openAi ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY");
+			if (options.baseUrl == null)
+				options.baseUrl = System.getenv(options.openAi ? "OPENAI_BASE_URL" : "ANTHROPIC_BASE_URL");
+			if (options.help || options.listModels)
 				return options;
 			if (options.input == null)
 				throw new IllegalArgumentException("No input file given");

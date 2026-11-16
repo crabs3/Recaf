@@ -67,46 +67,66 @@ private fun Choice(selected: Boolean, title: String, detail: String, onSelect: (
 	}
 }
 
-/** Settings of the agent: credentials, model, effort, and what it may do without asking. */
+/** Settings of the agent: what it runs on, how thoroughly it works, and what it may do without asking. */
 @Composable
 fun SettingsScreen(navigator: Navigator) {
 	val settings by SettingsStore.settings.collectAsStateWithLifecycle()
-	var showKey by remember { mutableStateOf(false) }
+	val context = LocalContext.current
 	ScreenFrame("Settings", navigator) { padding ->
 		Column(
 			Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
 			verticalArrangement = Arrangement.spacedBy(8.dp),
 		) {
-			SectionTitle("Anthropic API key")
-			OutlinedTextField(
-				value = settings.apiKey,
-				onValueChange = { value -> SettingsStore.update { it.copy(apiKey = value.trim()) } },
-				modifier = Modifier.fillMaxWidth(),
-				placeholder = { Text("sk-ant-…") },
-				singleLine = true,
-				visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-				keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-				trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide" else "Show") } },
-				supportingText = {
-					Text(if (settings.baseUrl.isBlank())
-						"Stored encrypted on this device and sent only to the Anthropic API. Create one at console.anthropic.com."
-					else "Stored encrypted on this device and sent to the API endpoint set below.")
-				},
-			)
+			SectionTitle("The agent runs on")
+			Choice(settings.provider == Provider.CLAUDE, "Claude",
+				"Anthropic's models, with an API key from the Claude Console.") {
+				SettingsStore.update { it.copy(provider = Provider.CLAUDE) }
+			}
+			Choice(settings.provider == Provider.OPENAI, "OpenAI-compatible API",
+				"OpenAI, a gateway such as OpenRouter, or a model server such as Ollama or LM Studio.") {
+				SettingsStore.update { it.copy(provider = Provider.OPENAI) }
+			}
 
-			SectionTitle("Model")
-			for (model in ClaudeModel.known())
-				Choice(settings.model == model.id(), model.name(), model.summary()) {
-					SettingsStore.update { it.copy(model = model.id()) }
+			if (settings.provider == Provider.CLAUDE) {
+				SectionTitle("Claude")
+				ClaudeConnection(settings)
+
+				SectionTitle("Effort")
+				Text("How thoroughly the agent works. Higher effort takes longer and costs more.",
+					style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+				Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+					for (effort in listOf("low", "medium", "high", "xhigh", "max"))
+						FilterChip(selected = settings.effort == effort, onClick = { SettingsStore.update { it.copy(effort = effort) } },
+							label = { Text(effort) })
 				}
 
-			SectionTitle("Effort")
-			Text("How thoroughly the agent works. Higher effort takes longer and costs more.",
-				style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-			Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-				for (effort in listOf("low", "medium", "high", "xhigh", "max"))
-					FilterChip(selected = settings.effort == effort, onClick = { SettingsStore.update { it.copy(effort = effort) } },
-						label = { Text(effort) })
+				SectionTitle("Declined requests")
+				Row(verticalAlignment = Alignment.CenterVertically) {
+					Column(Modifier.weight(1f)) {
+						Text("Retry on another model", style = MaterialTheme.typography.bodyMedium)
+						Text("Reverse engineering questions are sometimes declined by a model's safety filters. " +
+							"When that happens the request is answered by another Claude model instead of failing.",
+							style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+					}
+					Switch(checked = settings.refusalFallback, onCheckedChange = { value -> SettingsStore.update { it.copy(refusalFallback = value) } })
+				}
+
+				SectionTitle("API endpoint")
+				OutlinedTextField(
+					value = settings.baseUrl,
+					onValueChange = { value -> SettingsStore.update { it.copy(baseUrl = value.trim()) } },
+					modifier = Modifier.fillMaxWidth(),
+					placeholder = { Text("https://api.anthropic.com") },
+					singleLine = true,
+					keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+					supportingText = {
+						Text("Leave empty to use Anthropic's API. Set it only when your requests go through a gateway that " +
+							"speaks Anthropic's format: conversations and the API key are then sent to this address.")
+					},
+				)
+			} else {
+				SectionTitle("OpenAI-compatible API")
+				OpenAiConnection(settings)
 			}
 
 			SectionTitle("Changes to the program")
@@ -123,41 +143,16 @@ fun SettingsScreen(navigator: Navigator) {
 				SettingsStore.update { it.copy(approvalMode = ApprovalMode.READ_ONLY) }
 			}
 
-			SectionTitle("Declined requests")
-			Row(verticalAlignment = Alignment.CenterVertically) {
-				Column(Modifier.weight(1f)) {
-					Text("Retry on another model", style = MaterialTheme.typography.bodyMedium)
-					Text("Reverse engineering questions are sometimes declined by a model's safety filters. " +
-						"When that happens the request is answered by another Claude model instead of failing.",
-						style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-				}
-				Switch(checked = settings.refusalFallback, onCheckedChange = { value -> SettingsStore.update { it.copy(refusalFallback = value) } })
-			}
-
-			SectionTitle("API endpoint")
-			OutlinedTextField(
-				value = settings.baseUrl,
-				onValueChange = { value -> SettingsStore.update { it.copy(baseUrl = value.trim()) } },
-				modifier = Modifier.fillMaxWidth(),
-				placeholder = { Text("https://api.anthropic.com") },
-				singleLine = true,
-				keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-				supportingText = {
-					Text("Leave empty to use Anthropic's API. Set it only when your requests go through a gateway: " +
-						"conversations and the API key are then sent to this address.")
-				},
-			)
-
 			SectionTitle("Diagnostics")
 			Text("If something failed, this copies what Recaf recorded about it, to include in a bug report. " +
 				"It holds error details and the names of classes involved, nothing else.",
 				style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-			val context = LocalContext.current
 			OutlinedButton(onClick = { context.copyToClipboard("Recaf diagnostics", CrashLog.diagnostics()) }) {
 				Text("Copy diagnostics")
 			}
 
 			HorizontalDivider(Modifier.padding(top = 12.dp))
+			TextButton(onClick = { navigator.go(Screen.Onboarding) }) { Text("Run the setup again") }
 			Text("Recaf ${RecafBuildConfig.VERSION} for Android", style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}

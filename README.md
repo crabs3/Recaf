@@ -88,7 +88,7 @@ A complete list of features can be found in the [user guide](https://recaf.coley
 ## Android and agents
 
 - [`recaf-android`](recaf-android/README.md): Recaf's core packaged as an Android app. Open JARs, class files, DEX files and APKs on the device, including installed apps, and dissect them with a Claude-powered agent or by hand.
-- [`recaf-agent`](recaf-android/README.md#tools): The tool set behind it, usable on desktop too: 45 tools for reading, searching, editing, renaming, deobfuscating and scripting, an agent built on the Anthropic SDK, and an MCP server that offers the same tools to any MCP client.
+- [`recaf-agent`](recaf-android/README.md#tools): The tool set behind it, usable on desktop too: 45 tools for reading, searching, editing, renaming, deobfuscating and scripting, an agent that runs on Claude through the Anthropic SDK or on any OpenAI-compatible API, and an MCP server that offers the same tools to any MCP client.
 
 ## Documentation
 

@@ -189,10 +189,10 @@ fun ChatScreen(navigator: Navigator, agent: AgentViewModel) {
 				)
 				InitState.Ready -> if (agent.items.isEmpty()) {
 					Welcome(
-						hasKey = settings.apiKey.isNotBlank(),
+						hasKey = settings.agentReady,
 						hasWorkspace = workspace != null,
 						android = workspace?.android == true,
-						onOpenSettings = { navigator.go(Screen.Settings) },
+						onOpenSettings = { navigator.go(Screen.Onboarding) },
 						onOpenFile = { openDocument.launch(arrayOf("*/*")) },
 						onOpenApp = { navigator.go(Screen.Apps) },
 						onPlaybook = agent::send,
@@ -255,10 +255,11 @@ private fun Welcome(
 		if (!hasKey) {
 			Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
 				Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-					Text("Add an Anthropic API key", fontWeight = FontWeight.SemiBold)
-					Text("The agent runs on Claude and needs your API key. Browsing and the tools work without one.",
+					Text("Connect a model", fontWeight = FontWeight.SemiBold)
+					Text("The agent needs a model to think with: Claude, or any OpenAI-compatible API. " +
+						"Browsing and the tools work without one.",
 						style = MaterialTheme.typography.bodySmall)
-					Button(onClick = onOpenSettings) { Text("Open settings") }
+					Button(onClick = onOpenSettings) { Text("Set up") }
 				}
 			}
 		}

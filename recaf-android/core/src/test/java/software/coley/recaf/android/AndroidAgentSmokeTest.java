@@ -31,4 +31,9 @@ class AndroidAgentSmokeTest {
 	void agentLoopRuns() throws Exception {
 		AgentChecks.agentLoopRuns(tempDir);
 	}
+
+	@Test
+	void openAiLoopRuns() throws Exception {
+		AgentChecks.openAiLoopRuns(tempDir);
+	}
 }

@@ -203,6 +203,7 @@ dependencies {
     // Agent support: Claude SDK + scripting runtime.
     api(libs.anthropic)
     api(libs.rhino)
+    api(libs.okhttp)
 
     androidTestImplementation('androidx.test:runner:1.7.0')
     androidTestImplementation('androidx.test.ext:junit:1.3.0')

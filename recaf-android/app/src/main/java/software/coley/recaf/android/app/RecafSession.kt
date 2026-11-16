@@ -26,6 +26,7 @@ import software.coley.recaf.agent.tool.ToolCallListener
 import software.coley.recaf.agent.tool.ToolResult
 import software.coley.recaf.agent.tool.support.Workspaces
 import software.coley.recaf.android.compat.AndroidCompat
+import software.coley.recaf.android.compat.FileOffload
 import software.coley.recaf.services.workspace.WorkspaceManager
 import software.coley.recaf.services.workspace.io.ResourceImporter
 import software.coley.recaf.workspace.model.BasicWorkspace
@@ -177,6 +178,11 @@ object RecafSession {
 			runCatching {
 				val fileName = name()
 				openingFlow.value = fileName
+				// The previous workspace goes first: its memory is needed for the one being opened, and it may
+				// read from the very file that is about to be replaced.
+				val manager = recaf.get(WorkspaceManager::class.java)
+				if (manager.hasCurrentWorkspace())
+					manager.setCurrentIgnoringConditions(null)
 				val target = File(inputsDir, fileName)
 				copy(target)
 				open(target)
@@ -192,13 +198,16 @@ object RecafSession {
 
 	private fun open(file: File): String {
 		val manager = recaf.get(WorkspaceManager::class.java)
-		// The previous workspace goes first, so that its memory is available to the one being opened.
-		if (manager.hasCurrentWorkspace())
-			manager.setCurrentIgnoringConditions(null)
 		toolbox.context().state().clearFindings()
 		toolbox.context().state().setExported(false)
 		try {
-			val resource = recaf.get(ResourceImporter::class.java).importResource(file.toPath())
+			// Large resource files are read back from the file when needed instead of being kept in memory.
+			FileOffload.begin(file.toPath(), FileOffload.DEFAULT_THRESHOLD)
+			val resource = try {
+				recaf.get(ResourceImporter::class.java).importResource(file.toPath())
+			} finally {
+				FileOffload.end()
+			}
 			manager.setCurrentIgnoringConditions(BasicWorkspace(resource))
 			return file.name
 		} catch (error: OutOfMemoryError) {

@@ -44,6 +44,17 @@ final class ThinkTagSplitter {
 			text.accept(piece);
 			return;
 		}
+		if (state == State.AFTER_THINKING) {
+			// The line breaks that separate reasoning from reply are not part of the reply.
+			int begin = 0;
+			while (begin < piece.length() && (piece.charAt(begin) == '\n' || piece.charAt(begin) == '\r'))
+				begin++;
+			if (begin == piece.length())
+				return;
+			state = State.TEXT;
+			text.accept(piece.substring(begin));
+			return;
+		}
 		pending.append(piece);
 		if (state == State.START) {
 			// Leading whitespace in front of the tag is common and belongs to neither side.
@@ -67,10 +78,10 @@ final class ThinkTagSplitter {
 			if (close > 0)
 				thinking.accept(pending.substring(0, close));
 			pending.delete(0, close + CLOSE.length());
-			// The line break that separates reasoning from reply is not part of the reply.
-			while (pending.length() > 0 && (pending.charAt(0) == '\n' || pending.charAt(0) == '\r'))
-				pending.deleteCharAt(0);
-			flushAsText();
+			String rest = pending.toString();
+			pending.setLength(0);
+			state = State.AFTER_THINKING;
+			accept(rest);
 			return;
 		}
 		int keep = partialSuffix(pending, CLOSE);
@@ -115,5 +126,5 @@ final class ThinkTagSplitter {
 		return 0;
 	}
 
-	private enum State {START, THINKING, TEXT}
+	private enum State {START, THINKING, AFTER_THINKING, TEXT}
 }

@@ -7,6 +7,8 @@ import software.coley.recaf.agent.claude.AgentConfig;
 import software.coley.recaf.agent.chat.AgentListener;
 import software.coley.recaf.agent.chat.AgentTurn;
 import software.coley.recaf.agent.claude.ClaudeAgent;
+import software.coley.recaf.agent.openai.OpenAiAgent;
+import software.coley.recaf.agent.openai.OpenAiConfig;
 import software.coley.recaf.agent.mcp.McpHttpServer;
 import software.coley.recaf.agent.mcp.McpServer;
 import software.coley.recaf.agent.tool.AgentTool;
@@ -231,6 +233,70 @@ public final class AgentChecks {
 		for (int i = 0; i < keyValues.length; i += 2)
 			json.addProperty(keyValues[i], keyValues[i + 1]);
 		return json;
+	}
+
+	/**
+	 * The agent for OpenAI-compatible APIs driven end to end: its HTTP client streaming from a server that speaks
+	 * the chat completions format, a tool call whose arguments arrive in pieces, and the answer after it.
+	 */
+	public static void openAiLoopRuns(Path workDir) throws Exception {
+		AgentToolbox toolbox = toolbox(workDir);
+		CoreChecks.openSample("hello.jar");
+		List<String> requests = new ArrayList<>();
+		try (ServerSocket socket = new ServerSocket(0, 8, InetAddress.getByAddress(new byte[]{127, 0, 0, 1}))) {
+			Thread server = new Thread(() -> {
+				String[] responses = {
+						"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\"," +
+								"\"function\":{\"name\":\"get_class_info\",\"arguments\":\"\"}}]}}]}\n\n" +
+								"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"class\\\": \"}}]}}]}\n\n" +
+								"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"sample.Hello\\\"}\"}}]}}]}\n\n" +
+								"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+						"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"It implements \"}}]}\n\n" +
+								"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Runnable.\"}}]}\n\n" +
+								"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+				};
+				for (String response : responses) {
+					try (Socket connection = socket.accept()) {
+						requests.add(readRequestBody(connection.getInputStream()));
+						OutputStream out = connection.getOutputStream();
+						out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n" + response)
+								.getBytes(StandardCharsets.UTF_8));
+						out.flush();
+					} catch (IOException ex) {
+						requests.add("server failed: " + ex);
+					}
+				}
+			}, "mock-openai-api");
+			server.setDaemon(true);
+			server.start();
+
+			List<String> events = new ArrayList<>();
+			OpenAiConfig config = new OpenAiConfig("http://127.0.0.1:" + socket.getLocalPort() + "/v1", null, "device-model",
+					ApprovalMode.ALLOW_CHANGES);
+			OpenAiAgent agent = new OpenAiAgent(toolbox, config, new AgentListener() {
+				@Override
+				public void onText(String text) {
+					events.add("text:" + text);
+				}
+
+				@Override
+				public void onToolCallFinished(String callId, String result, boolean error, long durationMillis) {
+					events.add("tool:" + (error ? "error:" : "ok:") + result);
+				}
+			}, null);
+
+			AgentTurn turn = agent.send("What does Hello implement?");
+			check(turn.outcome() == AgentTurn.Outcome.COMPLETED, "Agent run ended with " + turn.outcome() + ": " + turn.detail());
+			check(requests.size() == 2, "Expected two requests, got " + requests);
+			check(events.size() == 3 && events.get(0).startsWith("tool:ok:") && events.get(0).contains("implements java/lang/Runnable"),
+					"Unexpected events: " + events);
+			check("It implements Runnable.".equals(agent.lastReply().orElse(null)), "Unexpected reply: " + agent.lastReply());
+			JsonObject second = JsonParser.parseString(requests.get(1)).getAsJsonObject();
+			// System prompt, question, the call and its result.
+			check(second.getAsJsonArray("messages").size() == 4, "The tool result was not sent back: " + requests.get(1));
+			check(second.getAsJsonArray("tools").size() == toolbox.tools().size(), "Tools were not declared");
+			check("device-model".equals(second.get("model").getAsString()), "Unexpected model: " + requests.get(1));
+		}
 	}
 
 	private static String sse(String stopReason, String blockStart, String delta) {

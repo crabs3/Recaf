@@ -95,4 +95,34 @@ class AgentCliTest extends AgentTestBase {
 		assertTrue(printed.contains("Hardcoded token"), printed);
 		assertTrue(api.requests.get(1).toString().contains("read-only"), api.requests.get(1).toString());
 	}
+	@Test
+	void runsWithAnOpenAiCompatibleApiAndListsItsModels() throws Exception {
+		try (MockOpenAiApi openAi = new MockOpenAiApi()) {
+			openAi.stream(MockOpenAiApi.toolStart(0, "call_1", "workspace_info"), MockOpenAiApi.toolArguments(0, "{}"), MockOpenAiApi.finish("tool_calls"))
+					.stream(MockOpenAiApi.text("A greeting program."), MockOpenAiApi.finish("stop"));
+			String input = sample("hello.jar").toString();
+			String[] arguments = {input, "--ask", "What is it?", "--provider", "openai", "--model", "test-model", "--base-url", openAi.baseUrl()};
+			try (AgentCli cli = new AgentCli(AgentCli.Options.parse(arguments), out)) {
+				cli.start();
+				assertTrue(cli.runAgent());
+			}
+			assertTrue(captured.toString(StandardCharsets.UTF_8).contains("A greeting program."));
+			assertEquals("test-model", openAi.requests.get(0).get("model").getAsString());
+			assertTrue(openAi.requests.get(1).toString().contains("hello.jar"), "The tool result goes back to the model");
+
+			// Without a model there is nothing to run on, and that is said.
+			try (AgentCli cli = new AgentCli(AgentCli.Options.parse(new String[]{input, "--ask", "x", "--provider", "openai", "--base-url", openAi.baseUrl()}), out)) {
+				cli.start();
+				assertFalse(cli.runAgent());
+				assertTrue(captured.toString(StandardCharsets.UTF_8).contains("--list-models"));
+			}
+
+			// Listing models needs no input file, and finds the API one level below a bare server address.
+			AgentCli.Options listing = AgentCli.Options.parse(new String[]{"--list-models", "--provider", "openai", "--base-url", openAi.root()});
+			assertEquals(java.util.List.of("alpha-large", "zeta-small"),
+					AgentCli.listModels(listing).stream().map(software.coley.recaf.agent.chat.ModelInfo::id).toList());
+		}
+		assertTrue(assertThrows(IllegalArgumentException.class, () -> AgentCli.Options.parse(new String[]{"a.jar", "--provider", "other", "--mcp"}))
+				.getMessage().contains("Unknown provider"));
+	}
 }

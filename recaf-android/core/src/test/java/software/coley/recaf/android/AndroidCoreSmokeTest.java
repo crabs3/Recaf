@@ -47,4 +47,9 @@ class AndroidCoreSmokeTest {
 	void importsAndDecompilesApk() throws Exception {
 		CoreChecks.importsAndDecompilesApk();
 	}
+
+	@Test
+	void codeAndLargeFilesAreFetchedOnDemand() throws Exception {
+		CoreChecks.codeAndLargeFilesAreFetchedOnDemand(true);
+	}
 }

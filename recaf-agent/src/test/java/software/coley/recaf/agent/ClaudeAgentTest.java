@@ -190,6 +190,21 @@ class ClaudeAgentTest extends AgentTestBase {
 	}
 
 	@Test
+	void listsTheModelsAKeyCanUse() throws Exception {
+		List<software.coley.recaf.agent.chat.ModelInfo> models = software.coley.recaf.agent.claude.ClaudeModels.list("test-key", api.baseUrl());
+		assertEquals(List.of("claude-opus-5-5", "claude-haiku-5-5"), models.stream().map(software.coley.recaf.agent.chat.ModelInfo::id).toList());
+		assertEquals("Claude Opus 5.5", models.get(0).name());
+
+		api.modelsStatus = 401;
+		assertThrows(software.coley.recaf.agent.claude.ClaudeModels.InvalidKeyException.class,
+				() -> software.coley.recaf.agent.claude.ClaudeModels.list("wrong-key", api.baseUrl()));
+		// An address nothing listens on is a different failure than a key that is not accepted.
+		java.io.IOException unreachable = assertThrows(java.io.IOException.class,
+				() -> software.coley.recaf.agent.claude.ClaudeModels.list("test-key", "http://127.0.0.1:1"));
+		assertFalse(unreachable instanceof software.coley.recaf.agent.claude.ClaudeModels.InvalidKeyException);
+	}
+
+	@Test
 	void refusedResponsesAreNotActedOn() {
 		api.respond("refusal", toolUse("toolu_1", "record_finding", "{\"severity\": \"info\", \"title\": \"t\", \"detail\": \"d\"}"))
 				.respond("end_turn", text("Here is a different answer."));

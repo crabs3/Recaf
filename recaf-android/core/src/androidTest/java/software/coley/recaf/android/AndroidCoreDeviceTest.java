@@ -48,4 +48,9 @@ public class AndroidCoreDeviceTest {
 	public void f_importsAndDecompilesApk() throws Exception {
 		CoreChecks.importsAndDecompilesApk();
 	}
+
+	@Test
+	public void g_codeAndLargeFilesAreFetchedOnDemand() throws Exception {
+		CoreChecks.codeAndLargeFilesAreFetchedOnDemand(false);
+	}
 }

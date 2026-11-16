@@ -35,4 +35,9 @@ public class AndroidAgentDeviceTest {
 	public void agentLoopRuns() throws Exception {
 		AgentChecks.agentLoopRuns(workDir());
 	}
+
+	@Test
+	public void openAiLoopRuns() throws Exception {
+		AgentChecks.openAiLoopRuns(workDir());
+	}
 }
