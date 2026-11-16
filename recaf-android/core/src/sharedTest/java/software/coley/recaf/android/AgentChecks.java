@@ -67,7 +67,7 @@ public final class AgentChecks {
 		expect("disassemble_method", "greet", "class", "sample/Hello", "method", "greet");
 		expect("get_inheritance", "java/lang/Runnable", "class", "sample/Hello");
 		expect("record_finding", "Recorded finding", "severity", "info", "title", "t", "detail", "d");
-		expect("list_findings", "1 findings");
+		expect("list_findings", "1 finding:");
 
 		// Search and program graph
 		expect("search_strings", "s3cr3t-token", "query", "s3cr3t");

@@ -78,7 +78,7 @@ public final class FindingTools implements ToolProvider {
 						int bySeverity = b.severity().compareTo(a.severity());
 						return bySeverity != 0 ? bySeverity : Integer.compare(a.id(), b.id());
 					});
-					StringBuilder sb = new StringBuilder(findings.size() + " findings:\n");
+					StringBuilder sb = new StringBuilder(findings.size() + (findings.size() == 1 ? " finding:\n" : " findings:\n"));
 					for (Finding finding : findings) {
 						sb.append("\n#").append(finding.id()).append(" [").append(finding.severity().name().toLowerCase()).append("] ")
 								.append(finding.title()).append('\n');

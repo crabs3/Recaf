@@ -66,5 +66,14 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Serves reverse engineering tools to MCP clients chosen by the user, on the user's request." />
         </service>
+
+        <service
+            android:name=".AgentService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps an analysis that the user started running while the app is in the background." />
+        </service>
     </application>
 </manifest>

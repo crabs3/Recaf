@@ -3,4 +3,6 @@
     <string name="app_name">Recaf</string>
     <string name="mcp_channel_name">MCP server</string>
     <string name="mcp_channel_description">Shown while Recaf\'s tools are being served to MCP clients.</string>
+    <string name="agent_channel_name">Agent at work</string>
+    <string name="agent_channel_description">Shown while the agent is analyzing, so that it keeps running in the background.</string>
 </resources>

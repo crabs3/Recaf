@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** A destination in the app. */
@@ -91,14 +92,10 @@ class MainActivity : ComponentActivity() {
 	private fun openWhenReady(uri: Uri) {
 		lifecycleScope.launch {
 			// Recaf may still be starting when the app is launched by an "Open with".
-			RecafSession.init.collect { state ->
-				if (state is InitState.Ready) {
-					val result = RecafSession.openUri(uri)
-					toast(result.fold({ "Opened $it" }, { "Could not open the file: ${it.message}" }))
-					navigator.toChat()
-				}
-				if (state !is InitState.Loading)
-					return@collect
+			if (RecafSession.init.first { it !is InitState.Loading } is InitState.Ready) {
+				val result = RecafSession.openUri(uri)
+				toast(result.fold({ "Opened $it" }, { "Could not open the file: ${it.message}" }))
+				navigator.toChat()
 			}
 		}
 	}

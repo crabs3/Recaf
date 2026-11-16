@@ -164,14 +164,25 @@ public final class AgentCli implements AutoCloseable {
 		AgentConfig config = new AgentConfig(apiKey, options.baseUrl, options.model, options.effort, AgentConfig.DEFAULT_MAX_TOKENS, true,
 				options.allowChanges ? AgentConfig.ApprovalMode.ALLOW_CHANGES : AgentConfig.ApprovalMode.READ_ONLY);
 		ClaudeAgent agent = new ClaudeAgent(toolbox, config, new AgentListener() {
+			private boolean midLine;
+
 			@Override
 			public void onText(@Nonnull String text) {
+				if (text.isEmpty())
+					return;
 				out.print(text);
 				out.flush();
+				midLine = !text.endsWith("\n");
 			}
 
 			@Override
 			public void onToolCallReady(@Nonnull String callId, @Nonnull String toolName, @Nonnull String argumentsJson) {
+				// Progress goes to the error stream so that the report on standard output can be piped as is.
+				// Text the agent wrote before calling the tool gets its line break first.
+				if (midLine) {
+					out.println();
+					midLine = false;
+				}
 				String arguments = argumentsJson.length() > 160 ? argumentsJson.substring(0, 160) + "…" : argumentsJson;
 				System.err.println("  > " + toolName + " " + arguments);
 			}
@@ -185,8 +196,10 @@ public final class AgentCli implements AutoCloseable {
 		AgentTurn turn = agent.send(options.prompt);
 		out.println();
 		List<Finding> findings = toolbox.context().state().findings();
-		if (!findings.isEmpty())
+		if (!findings.isEmpty()) {
+			out.println();
 			out.println(toolbox.call("list_findings", args()).text());
+		}
 		AgentListener.Usage usage = agent.usage();
 		System.err.printf("Tokens: %d in (%d from cache), %d out%s%n",
 				usage.inputTokens() + usage.cacheReadTokens() + usage.cacheWriteTokens(), usage.cacheReadTokens(), usage.outputTokens(),

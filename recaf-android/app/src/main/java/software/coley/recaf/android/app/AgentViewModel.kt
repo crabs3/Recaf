@@ -1,12 +1,13 @@
 package software.coley.recaf.android.app
 
+import android.app.Application
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,7 +65,7 @@ class ApprovalRequest(val tool: AgentTool, val arguments: ToolArgs, val decision
  * The agent reports from its own thread. Everything it reports is forwarded to the main thread before touching
  * state that the interface observes.
  */
-class AgentViewModel : ViewModel() {
+class AgentViewModel(application: Application) : AndroidViewModel(application) {
 	private val main = Handler(Looper.getMainLooper())
 	private var agent: ClaudeAgent? = null
 	private var agentSettings: Settings? = null
@@ -170,12 +171,14 @@ class AgentViewModel : ViewModel() {
 			return
 		}
 		running = true
+		AgentService.runStarted(getApplication()) { main.post { stop() } }
 		viewModelScope.launch {
 			val turn = withContext(Dispatchers.IO) {
 				runCatching { action(agentFor(settings)) }
 					.getOrElse { AgentTurn(AgentTurn.Outcome.ERROR, it.toString()) }
 			}
 			running = false
+			AgentService.runEnded()
 			describe(turn)?.let { items.add(it) }
 		}
 	}
@@ -218,7 +221,8 @@ class AgentViewModel : ViewModel() {
 	}
 
 	override fun onCleared() {
-		agent?.cancel()
+		stop()
+		AgentService.runEnded()
 		super.onCleared()
 	}
 

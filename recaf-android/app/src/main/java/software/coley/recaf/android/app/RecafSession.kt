@@ -148,6 +148,7 @@ object RecafSession {
 		val opened = BasicWorkspace(resource)
 		recaf.get(WorkspaceManager::class.java).setCurrentIgnoringConditions(opened)
 		toolbox.context().state().clearFindings()
+		toolbox.context().state().setExported(false)
 		return file.name
 	}
 
@@ -257,6 +258,6 @@ object RecafSession {
 		}
 		name = name ?: uri.lastPathSegment ?: "input"
 		// Keep only a plain file name, the input ends up as a file in the app's storage.
-		return name!!.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_").ifEmpty { "input" }
+		return name!!.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_").trimStart('.').ifEmpty { "input" }
 	}
 }
