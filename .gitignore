@@ -35,3 +35,6 @@ local.properties
 !recaf-agent/src/test/resources/samples/*.apk
 *.aab
 .kotlin/
+
+# Local agent worktrees
+.claude/
