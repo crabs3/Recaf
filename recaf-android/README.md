@@ -45,7 +45,8 @@ and so on.
 type a question or start one of the ready-made tasks: full analysis, quick triage, secret hunt,
 deobfuscation, Android audit. The agent's tool calls are shown inline and can be expanded, findings it
 records are collected on their own screen, and changes it wants to make wait for your approval unless you
-switch that off. A run can be stopped at any time and continued afterwards.
+switch that off. A run can be stopped at any time and continued afterwards. It keeps going while the app is in
+the background, with a notification that can stop it.
 
 Agent settings:
 
@@ -56,6 +57,7 @@ Agent settings:
 - *Retry on another model.* On by default. When a model's safety filters decline a request, which
   happens with reverse engineering questions, the API answers with another model instead. The chat says
   when that happened.
+- *API endpoint.* Empty by default, which means Anthropic's API. Set it when requests go through a gateway.
 
 **Do it by hand.** The browser lists packages, classes and files with search. A class opens decompiled
 (CFR, Procyon or Vineflower), as bytecode, or as a structure outline; the bytecode view can be edited and
