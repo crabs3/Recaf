@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Recaf</string>
+    <string name="mcp_channel_name">MCP server</string>
+    <string name="mcp_channel_description">Shown while Recaf\'s tools are being served to MCP clients.</string>
+</resources>

@@ -24,7 +24,14 @@ public final class StandardTools {
 	public static List<ToolProvider> providers(@Nonnull ToolContext context) {
 		return List.of(
 				new WorkspaceTools(context),
+				new NavigationTools(context),
 				new ClassTools(context),
+				new CodeTools(context),
+				new SearchTools(context),
+				new GraphTools(context),
+				new EditTools(context),
+				new MappingTools(context),
+				new TransformTools(context),
 				new ScriptTools(context),
 				new FindingTools(context)
 		);
