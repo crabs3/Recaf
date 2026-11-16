@@ -1,6 +1,7 @@
 rootProject.name = 'Recaf'
 
 include 'recaf-core'
+include 'recaf-agent'
 include 'recaf-ui'
 
 buildCache {

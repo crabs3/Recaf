@@ -1,5 +1,6 @@
 [versions]
 acc-agent = "1.0.4"
+anthropic = "3.9.0"
 apkzlib = "8.13.0"
 apksig = "8.13.0"
 assertj = "3.27.7"
@@ -39,6 +40,7 @@ pe = "2.2.3"
 procyon = "0.6.0"
 reactfx = { strictly = "2.0-M5" } # won't get updates, dead
 regex = "0.1.19"
+rhino = "1.9.2"
 richtextfx = "bb63ddb997" # fork based on 0.11.7 with folding performance improvements
 treemapfx = "1.1.0"
 vineflower = "1.12.0"
@@ -54,6 +56,8 @@ peterabeles-gversion = "1.10.3"
 
 [libraries]
 acc-agent = { module = "software.coley:javafx-access-agent", version.ref = "acc-agent" }
+
+anthropic = { module = "com.anthropic:anthropic-java", version.ref = "anthropic" }
 
 apkzlib = { module = "com.android.tools.build:apkzlib", version.ref = "apkzlib" }
 apksig = { module = "com.android.tools.build:apksig", version.ref = "apksig" }
@@ -143,6 +147,8 @@ regex = { module = "com.github.tommyettinger:regexodus", version.ref = "regex" }
 
 # richtextfx = { module = "org.fxmisc.richtext:richtextfx", version.ref = "richtextfx" }
 richtextfx = { module = "com.github.Col-E:RichTextFX", version.ref = "richtextfx" }
+
+rhino = { module = "org.mozilla:rhino", version.ref = "rhino" }
 
 treemapfx = { module = "software.coley:treemap-fx", version.ref = "treemapfx" }
 

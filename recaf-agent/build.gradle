@@ -1,0 +1,22 @@
+// Platform-neutral agent tooling for Recaf:
+//  - A tool layer exposing Recaf's dissection, editing and scripting capabilities in a model-friendly form
+//  - An embedded MCP server publishing those tools to external MCP clients
+//  - A Claude powered agent that drives the same tools for automated static analysis
+//
+// Everything in this module must also compile for Android, where it is built from source by 'recaf-android'.
+// That rules out desktop-only JDK APIs (javax.tools, java.awt, java.lang.management, com.sun.*, ...).
+
+apply plugin: 'java-library'
+
+dependencies {
+    api project(':recaf-core')
+    api(libs.anthropic)
+    api(libs.rhino)
+
+    testImplementation(testFixtures(project(':recaf-core')))
+}
+
+tasks.withType(Test).configureEach {
+    // Decompilers and the embedded HTTP server in tests benefit from a little more room than the default.
+    maxHeapSize = '2048m'
+}

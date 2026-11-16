@@ -1,0 +1,477 @@
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.MethodVisitor
+import org.objectweb.asm.Opcodes
+import org.objectweb.asm.commons.ClassRemapper
+import org.objectweb.asm.commons.Remapper
+
+import java.util.jar.JarEntry
+import java.util.jar.JarFile
+import java.util.jar.JarOutputStream
+
+plugins {
+    alias(androidLibs.plugins.android.library)
+}
+
+apply from: 'source-patches.gradle'
+
+// =====================================================================================================================
+// This module is 'recaf-core' (and the platform-neutral 'recaf-agent') compiled for Android.
+//
+// Nothing is forked: the desktop sources are synced from '../../recaf-core' and '../../recaf-agent' at build time and
+// compiled against the Android platform. Three mechanisms adapt them:
+//
+//   1. Overrides  - Any file under 'src/main/java' whose path matches a desktop source file replaces it.
+//                   These are the classes that rely on JDK features Android does not have (Weld, javax.tools, ...).
+//   2. Removals   - Desktop-only packages listed in 'desktopOnlySources' are dropped (attach API, launcher, ...).
+//   3. Retargeting - 'java.lang.foreign' does not exist on Android. Source references are rewritten to the shim in
+//                   'software.coley.recaf.android.foreign', and the LL-Java-Zip dependency is bytecode-relocated
+//                   onto the same shim (see 'retargetLljzip').
+// =====================================================================================================================
+
+def desktopCoreDir = file('../../recaf-core')
+def desktopAgentDir = file('../../recaf-agent')
+def overrideDir = file('src/main/java')
+def syncedSourcesDir = layout.buildDirectory.dir('generated/recaf/java')
+def generatedConfigDir = layout.buildDirectory.dir('generated/recaf/config')
+def generatedResourcesDir = layout.buildDirectory.dir('generated/recaf/resources')
+def retargetedLibsDir = layout.buildDirectory.dir('generated/recaf/libs')
+
+def foreignShimPackage = 'software.coley.recaf.android.foreign'
+
+def desktopOnlySources = project.ext.desktopOnlySources
+
+configurations {
+    // Holds the unmodified LL-Java-Zip jar which gets relocated onto the foreign-memory shim.
+    lljzipOriginal {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+    // JvmDowngrader's two artifacts ship overlapping classes. A desktop classpath tolerates that, DEX does not.
+    downgraderOriginal {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
+android {
+    namespace = 'software.coley.recaf.android.core'
+    compileSdk = 36
+
+    defaultConfig {
+        minSdk = 35
+        consumerProguardFiles 'consumer-rules.pro'
+        testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_22
+        targetCompatibility = JavaVersion.VERSION_22
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = [overrideDir, syncedSourcesDir.get().asFile, generatedConfigDir.get().asFile]
+            resources.srcDirs = [new File(desktopCoreDir, 'src/main/resources'),
+                                 new File(desktopAgentDir, 'src/main/resources'),
+                                 file('src/main/resources'),
+                                 generatedResourcesDir.get().asFile]
+        }
+        // 'sharedTest' holds checks and fixtures used by both the host JVM tests and the on-device tests.
+        // The sample fixtures live with the 'recaf-agent' tests so the desktop and Android builds share them.
+        test {
+            java.srcDirs = [file('src/test/java'), file('src/sharedTest/java')]
+            resources.srcDirs = [file('src/test/resources'), new File(desktopAgentDir, 'src/test/resources')]
+        }
+        androidTest {
+            java.srcDirs = [file('src/androidTest/java'), file('src/sharedTest/java')]
+            resources.srcDirs = [new File(desktopAgentDir, 'src/test/resources')]
+        }
+    }
+
+    testOptions {
+        unitTests.all {
+            it.useJUnitPlatform()
+            it.maxHeapSize = '2g'
+            it.testLogging {
+                events 'passed', 'skipped', 'failed'
+                showStandardStreams = true
+                exceptionFormat = 'full'
+            }
+        }
+    }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+
+    packaging {
+        resources {
+            excludes += ['META-INF/versions/**', 'META-INF/*.kotlin_module', 'META-INF/LICENSE*', 'META-INF/NOTICE*',
+                         'META-INF/AL2.0', 'META-INF/LGPL2.1', 'META-INF/INDEX.LIST', 'META-INF/DEPENDENCIES',
+                         'META-INF/*.md', 'META-INF/maven/**', 'META-INF/proguard/**', 'META-INF/native-image/**',
+                         'LICENSE*', 'NOTICE*', 'README*', 'module-info.class', '**/module-info.class',
+                         'about.html', 'plugin.properties', '**/*.java']
+            pickFirsts += ['META-INF/services/**', '**/*.properties', '**/*.txt', '**/*.xml', '**/*.json']
+        }
+    }
+}
+
+dependencies {
+    lljzipOriginal(libs.lljzip)
+
+    api(libs.jakarta.annotation)
+
+    // Same libraries as desktop 'recaf-core', minus the ones that cannot work on Android.
+    api(libs.bundles.asm)
+    api(libs.bundles.dex)
+    api(libs.binary.resources)
+    api(libs.cafedude)
+    api(libs.cdi.api)          // CDI *annotations/API* only. Weld is replaced by the reflective container.
+    api(libs.cfr)
+    api(libs.diffutils)
+    downgraderOriginal(libs.bundles.downgrader)
+    api(files(retargetedLibsDir.map { it.file('jvmdowngrader-android.jar') }) {
+        builtBy 'mergeDowngrader'
+    })
+    api(libs.extra.collections)
+    api(libs.extra.observables)
+    api(libs.gson)
+    api(libs.jelf)
+    api(libs.apkzlib)
+    api(libs.apksig)
+    api(libs.mapping.io)
+    api(libs.natural.order)
+    api(libs.pe)
+    api(libs.procyon)
+    api(libs.jlinker)
+    api(libs.regex)
+    api(libs.bundles.jasm) {
+        exclude group: 'com.github.jumanji144.dex'
+    }
+    api(libs.vineflower)
+    api(libs.sourcesolver)
+    api('org.slf4j:slf4j-api:2.0.17')
+    api('com.google.guava:guava:33.5.0-android')
+
+    // LL-Java-Zip relocated onto the foreign-memory shim.
+    api(files(retargetedLibsDir.map { it.file('lljzip-android.jar') }) {
+        builtBy 'retargetLljzip'
+    })
+
+    compileOnly(files(retargetedLibsDir.map { it.file('jdk-compile-stubs.jar') }) {
+        builtBy 'generateCompileOnlyStubs'
+    })
+
+    // Local libraries for internal use only (same as the desktop build).
+    implementation fileTree(dir: "${rootDir}/../libs", include: ['*.jar'])
+
+    // Agent support: Claude SDK + scripting runtime.
+    api(libs.anthropic)
+    api(libs.rhino)
+
+    androidTestImplementation('androidx.test:runner:1.7.0')
+    androidTestImplementation('androidx.test.ext:junit:1.3.0')
+
+    testImplementation(libs.junit.api)
+    testImplementation(libs.junit.params)
+    testImplementation(libs.assertj)
+    testRuntimeOnly(libs.junit.engine)
+    testRuntimeOnly(libs.junit.launcher)
+}
+
+configurations.configureEach {
+    // Mirror the exclusions of the desktop build.
+    exclude group: 'org.checkerframework'
+    exclude group: 'com.google.code.findbugs'
+    exclude group: 'com.google.errorprone'
+    exclude group: 'com.google.j2objc'
+    exclude group: 'org.jetbrains', module: 'annotations'
+    exclude group: 'com.ibm.icu'
+}
+
+// ========================================== SOURCE ASSEMBLY ==========================================
+
+/**
+ * @return Paths (relative to a java source root) of all override sources in this module.
+ */
+def overridePaths = {
+    def paths = []
+    if (overrideDir.exists()) {
+        fileTree(overrideDir) { include '**/*.java' }.visit { details ->
+            if (!details.directory) paths.add(details.relativePath.pathString)
+        }
+    }
+    return paths
+}
+
+// Copies the desktop sources into the build directory, dropping anything overridden or desktop-only,
+// and applying the retargeting rules in 'source-patches.gradle'.
+// Files are only rewritten when their content changes so that incremental compilation keeps working.
+def syncDesktopSources = tasks.register('syncDesktopSources') {
+    description = 'Assembles the recaf-core/recaf-agent sources that get compiled for Android'
+    def overrides = overridePaths()
+    def sourceRoots = [new File(desktopCoreDir, 'src/main/java'), new File(desktopAgentDir, 'src/main/java')]
+    def globalPatches = project.ext.globalSourcePatches
+    def filePatches = project.ext.fileSourcePatches
+    def outputDir = syncedSourcesDir
+    inputs.property('overrides', overrides)
+    inputs.property('desktopOnly', desktopOnlySources)
+    inputs.property('globalPatches', globalPatches.toString())
+    inputs.property('filePatches', filePatches.toString())
+    sourceRoots.each { File root -> if (root.exists()) inputs.dir(root) }
+    outputs.dir(outputDir)
+    doLast {
+        File outRoot = outputDir.get().asFile
+        Set<String> written = new HashSet<>()
+        Set<String> appliedFilePatches = new HashSet<>()
+        sourceRoots.findAll { it.exists() }.each { File root ->
+            fileTree(root) {
+                include '**/*.java'
+                exclude desktopOnlySources
+                exclude overrides
+            }.visit { details ->
+                if (details.directory) return
+                String path = details.relativePath.pathString
+                String text = details.file.getText('UTF-8')
+                globalPatches.each { patch -> text = text.replaceAll(patch.pattern, patch.replace) }
+                filePatches.findAll { it.file == path }.each { patch ->
+                    String patched = patch.containsKey('pattern') ?
+                            text.replaceAll(patch.pattern, patch.replace) : text.replace(patch.find, patch.replace)
+                    if (patched == text)
+                        throw new GradleException("Android source patch no longer applies to ${path}: ${patch.containsKey('pattern') ? patch.pattern : patch.find}")
+                    text = patched
+                    appliedFilePatches.add(path)
+                }
+                File target = new File(outRoot, path)
+                if (!target.exists() || target.getText('UTF-8') != text) {
+                    target.parentFile.mkdirs()
+                    target.setText(text, 'UTF-8')
+                }
+                written.add(path)
+            }
+        }
+        // A patch whose file vanished upstream should be noticed rather than silently skipped.
+        filePatches.collect { it.file }.unique().each { String path ->
+            if (!appliedFilePatches.contains(path) && !overrides.contains(path))
+                throw new GradleException("Android source patch targets a file that is not part of the sync: ${path}")
+        }
+        // Remove stale outputs.
+        fileTree(outRoot) { include '**/*.java' }.visit { details ->
+            if (!details.directory && !written.contains(details.relativePath.pathString))
+                details.file.delete()
+        }
+    }
+}
+
+// Equivalent of the desktop 'gversion' plugin output.
+def generateBuildConfig = tasks.register('generateRecafBuildConfig') {
+    def outputDir = generatedConfigDir
+    def versionString = project.version.toString()
+    def gitSha = providers.exec { commandLine 'git', 'rev-parse', 'HEAD'; ignoreExitValue = true }
+            .standardOutput.asText.map { it.trim() }.orElse('unknown')
+    def gitRevision = providers.exec { commandLine 'git', 'rev-list', '--count', 'HEAD'; ignoreExitValue = true }
+            .standardOutput.asText.map { it.trim() }.orElse('0')
+    def gitDate = providers.exec {
+        commandLine 'git', 'log', '-1', '--format=%cd', '--date=format:%Y %m/%d %H:%M'; ignoreExitValue = true
+    }.standardOutput.asText.map { it.trim() }.orElse('unknown')
+    def gitBranch = providers.exec { commandLine 'git', 'rev-parse', '--abbrev-ref', 'HEAD'; ignoreExitValue = true }
+            .standardOutput.asText.map { it.trim() }.orElse('unknown')
+    inputs.property('version', versionString)
+    inputs.property('sha', gitSha)
+    outputs.dir(outputDir)
+    doLast {
+        def revision = gitRevision.get().isInteger() ? gitRevision.get() : '0'
+        def file = new File(outputDir.get().asFile, 'software/coley/recaf/RecafBuildConfig.java')
+        file.parentFile.mkdirs()
+        file.setText("""\
+package software.coley.recaf;
+
+/**
+ * Automatically generated file containing build version information.
+ */
+public final class RecafBuildConfig {
+	public static final String MAVEN_GROUP = "software.coley";
+	public static final String MAVEN_NAME = "recaf-android";
+	public static final String VERSION = "${versionString}";
+	public static final int GIT_REVISION = ${revision};
+	public static final String GIT_SHA = "${gitSha.get()}";
+	public static final String GIT_DATE = "${gitDate.get()}";
+	public static final String GIT_BRANCH = "${gitBranch.get()}";
+	public static final String BUILD_DATE = "${gitDate.get()}";
+	public static final long BUILD_UNIX_TIME = 0L;
+	public static final int DIRTY = 0;
+
+	private RecafBuildConfig(){}
+}
+""", 'UTF-8')
+    }
+}
+
+// Index of CDI bean classes. Android has no classpath scanning, so the reflective container reads this list.
+def generateBeanIndex = tasks.register('generateBeanIndex') {
+    dependsOn syncDesktopSources
+    inputs.dir(overrideDir)
+    inputs.dir(syncedSourcesDir)
+    outputs.dir(generatedResourcesDir)
+    doLast {
+        def beanClasses = [] as TreeSet
+        [overrideDir, syncedSourcesDir.get().asFile].each { File root ->
+            fileTree(root) { include '**/*.java' }.files.each { File sourceFile ->
+                String text = sourceFile.getText('UTF-8')
+                if (!(text =~ /(?m)^\s*@(ApplicationScoped|Dependent)\b/))
+                    return
+                def packageMatcher = text =~ /(?m)^package\s+([a-zA-Z0-9_.]+);/
+                if (!packageMatcher.find())
+                    return
+                beanClasses.add(packageMatcher.group(1) + '.' + sourceFile.name[0..-6])
+            }
+        }
+        def outputFile = new File(generatedResourcesDir.get().asFile, 'META-INF/recaf-core-beans.txt')
+        outputFile.parentFile.mkdirs()
+        outputFile.setText(beanClasses.join('\n') + '\n', 'UTF-8')
+    }
+}
+
+// ========================================== LIBRARY RETARGETING ==========================================
+
+// Relocates LL-Java-Zip's use of 'java.lang.foreign' (absent on Android) onto the shim package, and redirects
+// 'FileChannel.map(MapMode, long, long, Arena)' (also absent) to a static helper in the shim.
+tasks.register('retargetLljzip') {
+    def input = configurations.lljzipOriginal
+    def output = retargetedLibsDir.map { it.file('lljzip-android.jar') }
+    def shimInternal = foreignShimPackage.replace('.', '/')
+    inputs.files(input)
+    inputs.property('shim', shimInternal)
+    outputs.file(output)
+    doLast {
+        def remapper = new Remapper() {
+            @Override
+            String map(String internalName) {
+                return internalName.startsWith('java/lang/foreign/') ?
+                        shimInternal + '/' + internalName.substring('java/lang/foreign/'.length()) : internalName
+            }
+        }
+        File outFile = output.get().asFile
+        outFile.parentFile.mkdirs()
+        new JarOutputStream(new FileOutputStream(outFile)).withCloseable { JarOutputStream jos ->
+            new JarFile(input.singleFile).withCloseable { JarFile jar ->
+                jar.entries().each { JarEntry entry ->
+                    if (entry.directory || entry.name == 'module-info.class' || entry.name.startsWith('META-INF/versions/'))
+                        return
+                    byte[] bytes = jar.getInputStream(entry).bytes
+                    if (entry.name.endsWith('.class')) {
+                        ClassReader reader = new ClassReader(bytes)
+                        ClassWriter writer = new ClassWriter(0)
+                        ClassVisitor redirect = new ClassVisitor(Opcodes.ASM9, new ClassRemapper(writer, remapper)) {
+                            @Override
+                            MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                                MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions)
+                                return new MethodVisitor(Opcodes.ASM9, mv) {
+                                    @Override
+                                    void visitMethodInsn(int opcode, String owner, String mName, String mDesc, boolean itf) {
+                                        if (owner == 'java/nio/channels/FileChannel' && mName == 'map'
+                                                && mDesc.contains('Ljava/lang/foreign/Arena;')) {
+                                            // Instance call -> static helper taking the channel as first argument.
+                                            super.visitMethodInsn(Opcodes.INVOKESTATIC, 'java/lang/foreign/ForeignSupport', 'map',
+                                                    '(Ljava/nio/channels/FileChannel;' + mDesc.substring(1), false)
+                                        } else {
+                                            super.visitMethodInsn(opcode, owner, mName, mDesc, itf)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        reader.accept(redirect, 0)
+                        bytes = writer.toByteArray()
+                    }
+                    jos.putNextEntry(new JarEntry(entry.name))
+                    jos.write(bytes)
+                    jos.closeEntry()
+                }
+            }
+        }
+    }
+}
+
+// Merges JvmDowngrader's artifacts into a single jar, keeping the first copy of each duplicated entry.
+tasks.register('mergeDowngrader') {
+    def input = configurations.downgraderOriginal
+    def output = retargetedLibsDir.map { it.file('jvmdowngrader-android.jar') }
+    inputs.files(input)
+    outputs.file(output)
+    doLast {
+        File outFile = output.get().asFile
+        outFile.parentFile.mkdirs()
+        Set<String> seen = new HashSet<>()
+        new JarOutputStream(new FileOutputStream(outFile)).withCloseable { JarOutputStream jos ->
+            // The core artifact goes first so that its copies of the shared classes win.
+            input.files.sort { a, b -> a.name.contains('java-api') <=> b.name.contains('java-api') }.each { File file ->
+                new JarFile(file).withCloseable { JarFile jar ->
+                    jar.entries().each { JarEntry entry ->
+                        if (entry.directory || entry.name == 'module-info.class' || entry.name.startsWith('META-INF/versions/')
+                                || entry.name.toUpperCase().startsWith('LICENSE') || !seen.add(entry.name))
+                            return
+                        jos.putNextEntry(new JarEntry(entry.name))
+                        jos.write(jar.getInputStream(entry).bytes)
+                        jos.closeEntry()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Some libraries declare JDK-only exception types in method signatures (for instance JvmDowngrader's
+// 'throws IllegalClassFormatException'). javac needs such types to exist in order to compile callers, the runtime
+// does not. This emits empty stand-ins which are only ever on the compile classpath.
+tasks.register('generateCompileOnlyStubs') {
+    def output = retargetedLibsDir.map { it.file('jdk-compile-stubs.jar') }
+    def stubs = ['java/lang/instrument/IllegalClassFormatException': 'java/lang/Exception']
+    inputs.property('stubs', stubs)
+    outputs.file(output)
+    doLast {
+        File outFile = output.get().asFile
+        outFile.parentFile.mkdirs()
+        new JarOutputStream(new FileOutputStream(outFile)).withCloseable { JarOutputStream jos ->
+            stubs.each { String name, String superName ->
+                ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)
+                writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, name, null, superName, null)
+                ['()V', '(Ljava/lang/String;)V'].each { String descriptor ->
+                    MethodVisitor mv = writer.visitMethod(Opcodes.ACC_PUBLIC, '<init>', descriptor, null, null)
+                    mv.visitCode()
+                    mv.visitVarInsn(Opcodes.ALOAD, 0)
+                    if (descriptor.contains('String')) mv.visitVarInsn(Opcodes.ALOAD, 1)
+                    mv.visitMethodInsn(Opcodes.INVOKESPECIAL, superName, '<init>', descriptor, false)
+                    mv.visitInsn(Opcodes.RETURN)
+                    mv.visitMaxs(0, 0)
+                    mv.visitEnd()
+                }
+                writer.visitEnd()
+                jos.putNextEntry(new JarEntry(name + '.class'))
+                jos.write(writer.toByteArray())
+                jos.closeEntry()
+            }
+        }
+    }
+}
+
+// ========================================== WIRING ==========================================
+
+tasks.withType(JavaCompile).configureEach {
+    dependsOn syncDesktopSources, generateBuildConfig
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-parameters' << '-Xmaxerrs' << '2000' << '-Xmaxwarns' << '0'
+}
+
+tasks.configureEach { task ->
+    // Anything that consumes java sources or java resources needs the generated inputs in place.
+    if (task.name.startsWith('process') && task.name.endsWith('JavaRes'))
+        task.dependsOn generateBeanIndex
+    if (task.name.contains('Lint') || task.name.endsWith('SourcesJar') || task.name.contains('Kotlin'))
+        task.dependsOn syncDesktopSources, generateBuildConfig, generateBeanIndex
+}

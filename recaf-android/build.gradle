@@ -1,0 +1,10 @@
+plugins {
+    alias(androidLibs.plugins.android.application) apply false
+    alias(androidLibs.plugins.android.library) apply false
+    alias(androidLibs.plugins.kotlin.compose) apply false
+}
+
+allprojects {
+    group = 'software.coley'
+    version = '4.0.0-SNAPSHOT'
+}

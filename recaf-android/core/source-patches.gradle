@@ -1,0 +1,150 @@
+// =====================================================================================================================
+// Rules that adapt the desktop 'recaf-core' sources to Android when they are synced into this module.
+//
+// Every per-file patch MUST match, otherwise the build fails. That way a change to the desktop sources that
+// invalidates a patch is noticed immediately instead of silently producing a different Android build.
+// =====================================================================================================================
+
+def compat = 'software.coley.recaf.android.compat.AndroidCompat'
+def foreign = 'software.coley.recaf.android.foreign'
+
+// Desktop-only sources with no Android counterpart.
+ext.desktopOnlySources = [
+        // JVM attach API, JMX and instrumentation agents
+        'software/coley/recaf/services/attach/**',
+        'software/coley/recaf/workspace/model/resource/AgentServerRemoteVmResource.java',
+        'software/coley/recaf/workspace/model/resource/WorkspaceRemoteVmResource.java',
+        'software/coley/recaf/info/properties/builtin/RemoteClassloaderProperty.java',
+        // Desktop launcher / CLI entry points
+        'software/coley/recaf/Main.java',
+        'software/coley/recaf/ExitDebugLoggingHook.java',
+        'software/coley/recaf/launch/**',
+        'software/coley/recaf/util/JdkValidation.java',
+        'software/coley/recaf/util/DesktopUtil.java',
+        // JDK internals that Android neither has nor needs
+        'software/coley/recaf/util/UnsafeUtil.java',
+        'software/coley/recaf/util/io/UnsafeIO.java',
+        // javac (javax.tools) integration. 'JavacCompiler' itself is overridden with the Android compiler bridge.
+        'software/coley/recaf/services/compile/CompileClasspathCache.java',
+        'software/coley/recaf/services/compile/CompileClasspathCacheConfig.java',
+        'software/coley/recaf/services/compile/ForwardingListener.java',
+        'software/coley/recaf/services/compile/JavacPhantomRefiner.java',
+        'software/coley/recaf/services/compile/ResourceVirtualJavaFileObject.java',
+        'software/coley/recaf/services/compile/VirtualFileManager.java',
+        'software/coley/recaf/services/compile/VirtualJavaFileObject.java',
+        'software/coley/recaf/services/compile/VirtualUnitMap.java',
+        // Source parsing is built on the JDK's internal javac parser ('com.sun.tools.javac'), as is the augmentation of
+        // Java scripts. 'JavacScriptEngine' is overridden, scripting on Android is JavaScript based (see recaf-agent).
+        'software/coley/recaf/services/source/**',
+        'software/coley/recaf/services/script/ScriptSourceAugmentation.java',
+        'software/coley/recaf/services/script/AugmentedSource.java',
+        'software/coley/recaf/services/script/AugmentedSourceUnit.java',
+        'software/coley/recaf/services/script/InsertCancelSignalVisitor.java',
+        'software/coley/recaf/services/script/ScriptTemplate.java',
+        // Weld specific plumbing. The reflective container in 'software.coley.recaf.android.cdi' replaces it.
+        'software/coley/recaf/cdi/EagerInitializationExtension.java',
+        'software/coley/recaf/services/plugin/PluginCdiContainer.java',
+        'software/coley/recaf/services/plugin/PluginParentBeansExtension.java',
+        'software/coley/recaf/services/plugin/PluginGraph.java',
+        'software/coley/recaf/services/plugin/PluginClassLoaderImpl.java',
+        'software/coley/recaf/services/plugin/PluginContainerImpl.java',
+        'software/coley/recaf/services/plugin/PluginEventForwarder.java',
+        'software/coley/recaf/services/plugin/LoadedPlugin.java',
+]
+
+// Applied to every synced file (regex -> replacement).
+ext.globalSourcePatches = [
+        // 'java.lang.foreign' does not exist on Android, use the ByteBuffer backed shim.
+        [pattern: /java\.lang\.foreign\./, replace: foreign + '.'],
+        // Java 11+ / 21+ library methods missing from the Android platform.
+        [pattern: /(?<![\w.])Files\.readString\(/, replace: compat + '.readString('],
+        [pattern: /(?<![\w.])Files\.writeString\(/, replace: compat + '.writeString('],
+        [pattern: /(?<![\w.])StandardCharsets\.UTF_32BE\b/, replace: compat + '.UTF_32BE'],
+        [pattern: /(?<![\w.])StandardCharsets\.UTF_32LE\b/, replace: compat + '.UTF_32LE'],
+        [pattern: /(?<![\w.])StandardCharsets\.UTF_32\b/, replace: compat + '.UTF_32'],
+]
+
+// Applied to individual files. Use 'find' for literal text or 'pattern' for a regex.
+ext.fileSourcePatches = [
+        [file: 'software/coley/recaf/util/JavaVersion.java',
+         find: 'Runtime.version().feature()', replace: compat + '.javaFeatureVersion()'],
+
+        [file: 'software/coley/recaf/services/phantom/analysis/ClassLookup.java',
+         find: 'ClassLoader.getPlatformClassLoader()', replace: compat + '.platformClassLoader()'],
+
+        [file: 'software/coley/recaf/services/file/RecafDirectoriesConfig.java',
+         find: 'import software.coley.recaf.launch.LaunchCommand;', replace: ''],
+        [file: 'software/coley/recaf/services/file/RecafDirectoriesConfig.java',
+         find: '{@link LaunchCommand}', replace: 'launch arguments'],
+
+        // Android ships no class files for its runtime. Outlines of platform classes are synthesized from reflection
+        // on demand instead of being read (and eagerly indexed) from the JDK's module image.
+        [file: 'software/coley/recaf/workspace/model/resource/RuntimeWorkspaceResource.java',
+         find: 'byte[] value = null;',
+         replace: 'byte[] value = software.coley.recaf.android.compat.RuntimeClassSynthesizer.getBytes(key);'],
+        [file: 'software/coley/recaf/workspace/model/resource/RuntimeWorkspaceResource.java',
+         find: '!hasSystemClass(key) && !hasClasspathClass(key)',
+         replace: '!software.coley.recaf.android.compat.RuntimeClassSynthesizer.exists(key)'],
+        [file: 'software/coley/recaf/workspace/model/resource/RuntimeWorkspaceResource.java',
+         pattern: /= ClasspathUtil\.get(System|Classpath)ClassTree\(\);/,
+         replace: '= new software.coley.collections.tree.SortedTreeImpl<>();'],
+        [file: 'software/coley/recaf/workspace/model/resource/RuntimeWorkspaceResource.java',
+         pattern: /for \(String name : ClasspathUtil\.getSystemClassSet\(\)\)\s*classes\.get\(name\);/,
+         replace: '{ /* Resolved lazily on Android */ }'],
+
+        // Android's regex engine (ICU) rejects an unescaped closing brace, which the JDK tolerates.
+        [file: 'software/coley/recaf/analytics/logging/InterceptingLogger.java',
+         find: 'replaceFirst("\\\\{}"', replace: 'replaceFirst("\\\\{\\\\}"'],
+
+        // No remote VM (attach API) resources on Android.
+        [file: 'software/coley/recaf/services/comment/CommentKey.java',
+         find: 'import software.coley.recaf.workspace.model.resource.WorkspaceRemoteVmResource;', replace: ''],
+        [file: 'software/coley/recaf/services/comment/CommentKey.java',
+         pattern: /(?s)case WorkspaceRemoteVmResource remoteVmResource -> \{.*?\n\t\t\t\}\n/,
+         replace: ''],
+
+        // Memory mapping goes through the foreign-memory shim.
+        [file: 'software/coley/recaf/util/io/PathByteSource.java',
+         find: 'fc.map(FileChannel.MapMode.READ_ONLY, 0L, fc.size(), Arena.ofAuto())',
+         replace: foreign + '.ForeignSupport.map(fc, FileChannel.MapMode.READ_ONLY, 0L, fc.size(), Arena.ofAuto())'],
+
+        // No trusted lookup on Android, and no private field poking in java.io readers.
+        [file: 'software/coley/recaf/util/ReflectUtil.java',
+         find: 'import sun.reflect.ReflectionFactory;', replace: ''],
+        [file: 'software/coley/recaf/util/ReflectUtil.java',
+         pattern: /(?s)Constructor<MethodHandles\.Lookup> lookupCtor = .*?\.invokeExact\(\);/,
+         replace: 'trustedLookup = MethodHandles.lookup();'],
+        [file: 'software/coley/recaf/util/io/IOUtil.java',
+         pattern: /new BufferedReader\(reader, 1\);\s*UnsafeIO\.setReaderBuffer\(br, buf\);/,
+         replace: 'new BufferedReader(reader, buf.length);'],
+
+        // Source generator helper uses a Java 20 reflection API.
+        [file: 'software/coley/recaf/util/analysis/gen/InstanceMapperGenerator.java',
+         find: 'import java.lang.reflect.AccessFlag;', replace: ''],
+        [file: 'software/coley/recaf/util/analysis/gen/InstanceMapperGenerator.java',
+         find: 'constructor.accessFlags().contains(AccessFlag.PUBLIC)',
+         replace: 'java.lang.reflect.Modifier.isPublic(constructor.getModifiers())'],
+
+        // The evaluator maps JDK methods onto host calls. A few of those hosts are Java 21 additions.
+        [file: 'software/coley/recaf/util/analysis/lookup/BasicInvokeVirtualLookup.java',
+         find: 'str(ctx).indexOf(str(a), i(b), i(c))', replace: compat + '.indexOf(str(ctx), str(a), i(b), i(c))'],
+        [file: 'software/coley/recaf/util/analysis/lookup/BasicInvokeVirtualLookup.java',
+         find: 'str(ctx).indexOf(i(a), i(b), i(c))', replace: compat + '.indexOf(str(ctx), i(a), i(b), i(c))'],
+        [file: 'software/coley/recaf/util/analysis/lookup/BasicInvokeVirtualLookup.java',
+         find: 'str(ctx).splitWithDelimiters(str(a), i(b))', replace: compat + '.splitWithDelimiters(str(ctx), str(a), i(b))'],
+        [file: 'software/coley/recaf/util/analysis/eval/InstanceFactory.java',
+         find: 'receiver.indexOf(str((ObjectValue) args.get(0)), i((IntValue) args.get(1)), i((IntValue) args.get(2)))',
+         replace: compat + '.indexOf(receiver, str((ObjectValue) args.get(0)), i((IntValue) args.get(1)), i((IntValue) args.get(2)))'],
+        [file: 'software/coley/recaf/util/analysis/eval/InstanceFactory.java',
+         find: 'receiver.indexOf(i((IntValue) args.get(0)), i((IntValue) args.get(1)), i((IntValue) args.get(2)))',
+         replace: compat + '.indexOf(receiver, i((IntValue) args.get(0)), i((IntValue) args.get(1)), i((IntValue) args.get(2)))'],
+        [file: 'software/coley/recaf/util/analysis/eval/InstanceFactory.java',
+         find: 'receiver.splitWithDelimiters(', replace: compat + '.splitWithDelimiters(receiver, '],
+        [file: 'software/coley/recaf/util/analysis/eval/InstanceFactory.java',
+         find: 'receiver.repeat(', replace: compat + '.repeat(receiver, '],
+        [file: 'software/coley/recaf/util/analysis/eval/InstanceFactory.java',
+         pattern: /receiver\.(getModuleName|getModuleVersion|getClassLoaderName)\(\)/, replace: '((String) null)'],
+        [file: 'software/coley/recaf/util/analysis/eval/InstanceFactory.java',
+         pattern: /(?m)^.*\(Ljava\/lang\/String;Ljava\/lang\/String;Ljava\/lang\/String;Ljava\/lang\/String;Ljava\/lang\/String;Ljava\/lang\/String;I\)V.*\r?\n/,
+         replace: ''],
+]

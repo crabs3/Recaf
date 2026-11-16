@@ -29,3 +29,9 @@ temp/
 
 # IntelliJ
 lib/
+# Android
+local.properties
+*.apk
+!recaf-agent/src/test/resources/samples/*.apk
+*.aab
+.kotlin/

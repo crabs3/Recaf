@@ -1,0 +1,43 @@
+// Standalone Gradle build for the Android port of Recaf.
+//
+// This build is intentionally separate from the desktop build in the parent directory so that
+// the Android Gradle Plugin never has to share a plugin classpath with the JavaFX/Shadow tooling.
+// It consumes 'recaf-core' and 'recaf-agent' by *source* (see core/build.gradle), compiling them
+// against the Android platform instead of the desktop JDK.
+//
+// Usage (from the repository root):
+//   ./gradlew -p recaf-android :app:assembleDebug
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url = 'https://jitpack.io'
+            name = 'JitPack'
+        }
+    }
+    versionCatalogs {
+        // Desktop Recaf's catalog, so both builds agree on library versions.
+        libs {
+            from(files('../gradle/libs.versions.toml'))
+        }
+        // Android-only additions.
+        androidLibs {
+            from(files('gradle/android.versions.toml'))
+        }
+    }
+}
+
+rootProject.name = 'recaf-android'
+
+include ':core'
+include ':app'
