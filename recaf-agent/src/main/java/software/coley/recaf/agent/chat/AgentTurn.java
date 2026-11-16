@@ -1,4 +1,4 @@
-package software.coley.recaf.agent.claude;
+package software.coley.recaf.agent.chat;
 
 import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;

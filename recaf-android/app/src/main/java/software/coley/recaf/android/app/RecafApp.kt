@@ -9,6 +9,7 @@ import android.app.Application
 class RecafApp : Application() {
 	override fun onCreate() {
 		super.onCreate()
+		CrashLog.install(this)
 		SettingsStore.init(this)
 		RecafSession.start(this)
 	}

@@ -261,7 +261,7 @@ fun AppsScreen(navigator: Navigator) {
 									agent.newConversation()
 									navigator.toChat()
 								}
-								context.toast(result.fold({ "Opened ${app.label}" }, { "Could not open the app: ${it.message}" }))
+								if (result.isSuccess) context.toast("Opened ${app.label}")
 							}
 						}.padding(horizontal = 16.dp, vertical = 10.dp)
 					) {

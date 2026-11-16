@@ -53,6 +53,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class McpHttpServer implements AutoCloseable {
 	public static final String ENDPOINT = "/mcp";
 	public static final int DEFAULT_PORT = 8765;
+	private static final long WORKER_STACK_SIZE = 32L * 1024 * 1024;
 	private static final int MAX_HEADER_BYTES = 32 * 1024;
 	private static final int MAX_BODY_BYTES = 32 * 1024 * 1024;
 	private static final int IDLE_TIMEOUT_MILLIS = 60_000;
@@ -106,7 +107,8 @@ public final class McpHttpServer implements AutoCloseable {
 		socket.bind(address == null ? new InetSocketAddress(port) : new InetSocketAddress(address, port));
 		serverSocket = socket;
 		workers = new ThreadPoolExecutor(0, MAX_CONNECTIONS, 30, TimeUnit.SECONDS, new SynchronousQueue<>(), runnable -> {
-			Thread thread = new Thread(runnable, "recaf-mcp-" + threadCounter.incrementAndGet());
+			// Tool calls run on these threads, and decompilers and assemblers recurse deeply.
+			Thread thread = new Thread(null, runnable, "recaf-mcp-" + threadCounter.incrementAndGet(), WORKER_STACK_SIZE);
 			thread.setDaemon(true);
 			return thread;
 		});

@@ -70,6 +70,11 @@ ext.fileSourcePatches = [
         [file: 'software/coley/recaf/util/JavaVersion.java',
          find: 'Runtime.version().feature()', replace: compat + '.javaFeatureVersion()'],
 
+        // Decompilers and analyses recurse deeply. Android gives a new thread about 1 MB of stack, and code that is not
+        // compiled yet needs more of it per call than on a desktop JVM, so worker threads ask for a larger stack.
+        [file: 'software/coley/recaf/util/threading/ThreadPoolFactory.java',
+         find: 'Thread thread = new Thread(r);', replace: 'Thread thread = new Thread(null, r, "recaf", ' + compat + '.WORKER_STACK_SIZE);'],
+
         [file: 'software/coley/recaf/services/phantom/analysis/ClassLookup.java',
          find: 'ClassLoader.getPlatformClassLoader()', replace: compat + '.platformClassLoader()'],
 

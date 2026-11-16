@@ -50,7 +50,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import software.coley.recaf.agent.state.Finding
@@ -177,7 +176,7 @@ fun ToolFormScreen(navigator: Navigator, name: String) {
 				}
 				running = true
 				scope.launch {
-					val outcome = withContext(Dispatchers.IO) { RecafSession.callTool(name, arguments) }
+					val outcome = withContext(RecafSession.work) { RecafSession.callTool(name, arguments) }
 					failed = outcome.error()
 					result = outcome.text()
 					running = false

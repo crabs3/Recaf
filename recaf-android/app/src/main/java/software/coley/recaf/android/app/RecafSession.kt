@@ -4,12 +4,15 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.google.gson.JsonObject
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import software.coley.recaf.Bootstrap
 import software.coley.recaf.Recaf
@@ -22,11 +25,14 @@ import software.coley.recaf.agent.tool.ToolArgs
 import software.coley.recaf.agent.tool.ToolCallListener
 import software.coley.recaf.agent.tool.ToolResult
 import software.coley.recaf.agent.tool.support.Workspaces
+import software.coley.recaf.android.compat.AndroidCompat
 import software.coley.recaf.services.workspace.WorkspaceManager
 import software.coley.recaf.services.workspace.io.ResourceImporter
 import software.coley.recaf.workspace.model.BasicWorkspace
 import software.coley.recaf.workspace.model.Workspace
 import java.io.File
+import java.io.IOException
+import java.util.concurrent.Executors
 
 /** State of loading Recaf's services. */
 sealed interface InitState {
@@ -64,7 +70,16 @@ data class ToolActivity(val time: Long, val tool: String, val arguments: String,
  */
 object RecafSession {
 	private const val MAX_ACTIVITY = 200
-	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+	/**
+	 * Where Recaf's work runs. Decompilers, assemblers and the importers recurse deeply, more deeply than the
+	 * stack of an ordinary Android thread allows for large classes, so these threads get a large one.
+	 */
+	val work: CoroutineDispatcher = Executors.newCachedThreadPool { task ->
+		Thread(null, task, "recaf-work", AndroidCompat.WORKER_STACK_SIZE).apply { isDaemon = true }
+	}.asCoroutineDispatcher()
+	private val scope = CoroutineScope(SupervisorJob() + work)
+	private val openMutex = Mutex()
 	private lateinit var appContext: Context
 	private lateinit var recaf: Recaf
 	private var mcpServer: McpHttpServer? = null
@@ -74,12 +89,19 @@ object RecafSession {
 	private val findingsFlow = MutableStateFlow<List<Finding>>(emptyList())
 	private val mcpFlow = MutableStateFlow(McpState())
 	private val activityFlow = MutableStateFlow<List<ToolActivity>>(emptyList())
+	private val openingFlow = MutableStateFlow<String?>(null)
 
 	val init: StateFlow<InitState> get() = initFlow
 	val workspace: StateFlow<WorkspaceState?> get() = workspaceFlow
 	val findings: StateFlow<List<Finding>> get() = findingsFlow
 	val mcp: StateFlow<McpState> get() = mcpFlow
 	val activity: StateFlow<List<ToolActivity>> get() = activityFlow
+
+	/** Name of the file that is being opened right now, or `null` when none is. */
+	val opening: StateFlow<String?> get() = openingFlow
+
+	/** Why the last attempt to open a file failed, until it was shown to the user. */
+	val openFailure: MutableStateFlow<String?> = MutableStateFlow(null)
 
 	/** The agent toolbox. Only valid once [init] is [InitState.Ready]. */
 	lateinit var toolbox: AgentToolbox
@@ -90,7 +112,7 @@ object RecafSession {
 
 	fun start(context: Context) {
 		appContext = context.applicationContext
-		scope.launch(Dispatchers.IO) {
+		scope.launch {
 			try {
 				// Recaf keeps its configuration and temporary files below this directory.
 				System.setProperty("RECAF_DIR", File(appContext.filesDir, "recaf").apply { mkdirs() }.absolutePath)
@@ -122,41 +144,78 @@ object RecafSession {
 	 * Copies the content behind a URI into the app's storage and opens it as the workspace.
 	 * Recaf works on files, and a granted content URI may stop being readable once the app is restarted.
 	 */
-	suspend fun openUri(uri: Uri): Result<String> = withContext(Dispatchers.IO) {
-		runCatching {
-			val name = displayName(uri)
-			val target = File(inputsDir, name)
-			appContext.contentResolver.openInputStream(uri).use { input ->
-				requireNotNull(input) { "The file could not be read" }
-				target.outputStream().use { output -> input.copyTo(output) }
-			}
-			open(target)
+	suspend fun openUri(uri: Uri): Result<String> = import({ displayName(uri) }) { target ->
+		appContext.contentResolver.openInputStream(uri).use { input ->
+			requireNotNull(input) { "The file could not be read" }
+			target.outputStream().use { output -> input.copyTo(output) }
 		}
 	}
 
 	/** Copies a file, such as the APK of an installed app, into the app's storage and opens it. */
-	suspend fun openCopyOf(source: File, name: String): Result<String> = withContext(Dispatchers.IO) {
-		runCatching {
-			val target = File(inputsDir, name)
-			source.inputStream().use { input -> target.outputStream().use { output -> input.copyTo(output) } }
-			open(target)
+	suspend fun openCopyOf(source: File, name: String): Result<String> = import({ name }) { target ->
+		source.inputStream().use { input -> target.outputStream().use { output -> input.copyTo(output) } }
+	}
+
+	/**
+	 * Opens a file as the workspace, one at a time: a second request made while a file is still being opened is
+	 * turned down rather than run alongside, since each import needs a good part of the memory there is.
+	 */
+	private suspend fun import(name: () -> String, copy: (File) -> Unit): Result<String> = withContext(work) {
+		if (!openMutex.tryLock()) {
+			openFailure.value = "Another file is still being opened."
+			return@withContext Result.failure(IOException("Another file is still being opened."))
+		}
+		try {
+			// Recaf may still be starting, for instance when the app was restarted while a file was being picked.
+			when (val state = init.first { it !is InitState.Loading }) {
+				is InitState.Failed -> {
+					openFailure.value = "Recaf could not start: ${state.message}"
+					return@withContext Result.failure(IOException("Recaf could not start: ${state.message}"))
+				}
+				else -> {}
+			}
+			runCatching {
+				val fileName = name()
+				openingFlow.value = fileName
+				val target = File(inputsDir, fileName)
+				copy(target)
+				open(target)
+			}.onFailure {
+				CrashLog.note("Opening a file failed", it)
+				openFailure.value = it.message ?: it.toString()
+			}
+		} finally {
+			openingFlow.value = null
+			openMutex.unlock()
 		}
 	}
 
 	private fun open(file: File): String {
-		val resource = recaf.get(ResourceImporter::class.java).importResource(file.toPath())
-		val opened = BasicWorkspace(resource)
-		recaf.get(WorkspaceManager::class.java).setCurrentIgnoringConditions(opened)
+		val manager = recaf.get(WorkspaceManager::class.java)
+		// The previous workspace goes first, so that its memory is available to the one being opened.
+		if (manager.hasCurrentWorkspace())
+			manager.setCurrentIgnoringConditions(null)
 		toolbox.context().state().clearFindings()
 		toolbox.context().state().setExported(false)
-		return file.name
+		try {
+			val resource = recaf.get(ResourceImporter::class.java).importResource(file.toPath())
+			manager.setCurrentIgnoringConditions(BasicWorkspace(resource))
+			return file.name
+		} catch (error: OutOfMemoryError) {
+			// Let go of whatever was built so far, so that the app is usable again.
+			runCatching { manager.setCurrentIgnoringConditions(null) }
+			System.gc()
+			val megabytes = Runtime.getRuntime().maxMemory() / (1024 * 1024)
+			throw IOException("${file.name} needs more memory than Android gives an app on this device ($megabytes MB). " +
+				"Try a smaller file, or a single DEX or JAR taken out of it.")
+		}
 	}
 
 	/** Calls a tool. Blocks, so call it off the main thread. */
 	fun callTool(name: String, arguments: JsonObject): ToolResult = toolbox.call(name, arguments)
 
 	/** Calls a tool with string arguments on a background thread. */
-	suspend fun tool(name: String, vararg arguments: Pair<String, Any?>): ToolResult = withContext(Dispatchers.IO) {
+	suspend fun tool(name: String, vararg arguments: Pair<String, Any?>): ToolResult = withContext(work) {
 		val json = JsonObject()
 		for ((key, value) in arguments) {
 			when (value) {
@@ -170,15 +229,16 @@ object RecafSession {
 	}
 
 	/** @return Internal names of all classes of the open workspace, sorted. */
-	suspend fun classNames(): List<String> = withContext(Dispatchers.IO) {
+	suspend fun classNames(): List<String> = withContext(work) {
 		val current = toolbox.context().workspaceOrNull() ?: return@withContext emptyList()
-		Workspaces.classes(current).map { it.value.name }.sorted().toList()
+		// A name can occur more than once, in several DEX files or in the versioned folders of a JAR.
+		Workspaces.classes(current).map { it.value.name }.distinct().sorted().toList()
 	}
 
 	/** @return Paths of all files of the open workspace, sorted. */
-	suspend fun fileNames(): List<String> = withContext(Dispatchers.IO) {
+	suspend fun fileNames(): List<String> = withContext(work) {
 		val current = toolbox.context().workspaceOrNull() ?: return@withContext emptyList()
-		Workspaces.files(current).map { it.value.name }.sorted().toList()
+		Workspaces.files(current).map { it.value.name }.distinct().sorted().toList()
 	}
 
 	/**
@@ -186,7 +246,7 @@ object RecafSession {
 	 *
 	 * @return Summary of what was written.
 	 */
-	suspend fun exportTo(uri: Uri): Result<String> = withContext(Dispatchers.IO) {
+	suspend fun exportTo(uri: Uri): Result<String> = withContext(work) {
 		runCatching {
 			val name = "export-" + System.currentTimeMillis() + "-" + (workspaceFlow.value?.name ?: "workspace")
 			val result = toolbox.call("export_workspace", JsonObject().apply {

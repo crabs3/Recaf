@@ -2,6 +2,7 @@ package software.coley.recaf.agent.claude;
 
 import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
+import software.coley.recaf.agent.chat.ApprovalMode;
 
 /**
  * Settings of a {@link ClaudeAgent}.
@@ -41,17 +42,5 @@ public record AgentConfig(@Nonnull String apiKey, @Nullable String baseUrl, @Non
 	public static AgentConfig defaults(@Nonnull String apiKey) {
 		return new AgentConfig(apiKey, null, ClaudeModel.DEFAULT.id(), DEFAULT_EFFORT, DEFAULT_MAX_TOKENS, true,
 				ApprovalMode.ASK_BEFORE_CHANGES);
-	}
-
-	/**
-	 * Policy for tool calls that modify the workspace.
-	 */
-	public enum ApprovalMode {
-		/** Every modifying tool call is put to the user first. */
-		ASK_BEFORE_CHANGES,
-		/** Modifying tool calls run without asking. */
-		ALLOW_CHANGES,
-		/** Modifying tool calls are declined, the agent can only inspect. */
-		READ_ONLY
 	}
 }

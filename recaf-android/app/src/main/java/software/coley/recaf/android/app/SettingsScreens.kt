@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import software.coley.recaf.RecafBuildConfig
+import software.coley.recaf.agent.chat.ApprovalMode
 import software.coley.recaf.agent.claude.AgentConfig
 import software.coley.recaf.agent.claude.ClaudeModel
 import software.coley.recaf.agent.mcp.McpHttpServer
@@ -109,17 +110,17 @@ fun SettingsScreen(navigator: Navigator) {
 			}
 
 			SectionTitle("Changes to the program")
-			Choice(settings.approvalMode == AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES, "Ask before changes",
+			Choice(settings.approvalMode == ApprovalMode.ASK_BEFORE_CHANGES, "Ask before changes",
 				"The agent asks before every edit, rename, script or export.") {
-				SettingsStore.update { it.copy(approvalMode = AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES) }
+				SettingsStore.update { it.copy(approvalMode = ApprovalMode.ASK_BEFORE_CHANGES) }
 			}
-			Choice(settings.approvalMode == AgentConfig.ApprovalMode.ALLOW_CHANGES, "Allow changes",
+			Choice(settings.approvalMode == ApprovalMode.ALLOW_CHANGES, "Allow changes",
 				"The agent modifies the workspace without asking. Nothing reaches a file until you export.") {
-				SettingsStore.update { it.copy(approvalMode = AgentConfig.ApprovalMode.ALLOW_CHANGES) }
+				SettingsStore.update { it.copy(approvalMode = ApprovalMode.ALLOW_CHANGES) }
 			}
-			Choice(settings.approvalMode == AgentConfig.ApprovalMode.READ_ONLY, "Read only",
+			Choice(settings.approvalMode == ApprovalMode.READ_ONLY, "Read only",
 				"The agent can inspect the program but not change it.") {
-				SettingsStore.update { it.copy(approvalMode = AgentConfig.ApprovalMode.READ_ONLY) }
+				SettingsStore.update { it.copy(approvalMode = ApprovalMode.READ_ONLY) }
 			}
 
 			SectionTitle("Declined requests")
@@ -146,6 +147,15 @@ fun SettingsScreen(navigator: Navigator) {
 						"conversations and the API key are then sent to this address.")
 				},
 			)
+
+			SectionTitle("Diagnostics")
+			Text("If something failed, this copies what Recaf recorded about it, to include in a bug report. " +
+				"It holds error details and the names of classes involved, nothing else.",
+				style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+			val context = LocalContext.current
+			OutlinedButton(onClick = { context.copyToClipboard("Recaf diagnostics", CrashLog.diagnostics()) }) {
+				Text("Copy diagnostics")
+			}
 
 			HorizontalDivider(Modifier.padding(top = 12.dp))
 			Text("Recaf ${RecafBuildConfig.VERSION} for Android", style = MaterialTheme.typography.bodySmall,

@@ -61,6 +61,12 @@ configurations {
         canBeResolved = true
         transitive = false
     }
+    // The assembler's value analysis names a JDK class Android does not have, see 'retargetJasmAnalysis'.
+    jasmAnalysisOriginal {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
     // JvmDowngrader's two artifacts ship overlapping classes. A desktop classpath tolerates that, DEX does not.
     downgraderOriginal {
         canBeConsumed = false
@@ -168,7 +174,12 @@ dependencies {
     api(libs.regex)
     api(libs.bundles.jasm) {
         exclude group: 'com.github.jumanji144.dex'
+        exclude group: 'com.github.jumanji144.Jasm', module: 'jasm-composition-analysis'
     }
+    jasmAnalysisOriginal('com.github.jumanji144.Jasm:jasm-composition-analysis:' + libs.versions.jasm.get())
+    api(files(retargetedLibsDir.map { it.file('jasm-analysis-android.jar') }) {
+        builtBy 'retargetJasmAnalysis'
+    })
     vineflowerOriginal(libs.vineflower)
     api(files(retargetedLibsDir.map { it.file('vineflower-android.jar') }) {
         builtBy 'retargetVineflower'
@@ -480,6 +491,21 @@ tasks.register('retargetProcyon') {
 
 // Vineflower parses its own class file as a placeholder class, and bundles plugins as nested jars of JVM bytecode.
 // Android offers class files for neither lookup, and cannot load the plugins (desktop Recaf strips them as well).
+// The assembler's value analysis keeps a table of well known JDK types, built from class literals when it is first
+// used. One of them, 'java.lang.ProcessHandle', does not exist on Android, which makes the whole table (and with it
+// every assembly of a method) fail. The entry is pointed at a type that is in the table already.
+tasks.register('retargetJasmAnalysis') {
+    def input = configurations.jasmAnalysisOriginal
+    def output = retargetedLibsDir.map { it.file('jasm-analysis-android.jar') }
+    def rules = [
+            classes: ['java/lang/ProcessHandle': 'java/lang/Process'],
+    ]
+    inputs.files(input)
+    inputs.property('rules', rules.toString())
+    outputs.file(output)
+    doLast { retargetJar(input.singleFile, output.get().asFile, rules) }
+}
+
 tasks.register('retargetVineflower') {
     def input = configurations.vineflowerOriginal
     def output = retargetedLibsDir.map { it.file('vineflower-android.jar') }

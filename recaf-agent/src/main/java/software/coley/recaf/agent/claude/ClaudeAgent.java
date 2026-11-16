@@ -39,10 +39,14 @@ import com.google.gson.reflect.TypeToken;
 import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
 import org.slf4j.Logger;
+import software.coley.recaf.agent.chat.AgentListener;
+import software.coley.recaf.agent.chat.AgentTurn;
+import software.coley.recaf.agent.chat.ChatAgent;
+import software.coley.recaf.agent.chat.ToolApprover;
+import software.coley.recaf.agent.chat.ToolCallRunner;
 import software.coley.recaf.agent.prompt.Playbooks;
 import software.coley.recaf.agent.tool.AgentTool;
 import software.coley.recaf.agent.tool.AgentToolbox;
-import software.coley.recaf.agent.tool.ToolArgs;
 import software.coley.recaf.agent.tool.ToolResult;
 import software.coley.recaf.analytics.logging.Logging;
 
@@ -80,7 +84,7 @@ import java.util.Optional;
  *
  * @author Recaf agent tooling
  */
-public final class ClaudeAgent {
+public final class ClaudeAgent implements ChatAgent {
 	/** Upper bound of model requests for a single user message, as a guard against runaway loops. */
 	private static final int MAX_STEPS = 300;
 	/** How often a malformed or cut-off response is retried before giving up. */
@@ -92,7 +96,7 @@ public final class ClaudeAgent {
 	private final AgentConfig config;
 	private final ClaudeModel model;
 	private final AgentListener listener;
-	private final ToolApprover approver;
+	private final ToolCallRunner toolRunner;
 	private final AnthropicClient client;
 	private final List<BetaTool> tools;
 	private final List<BetaTextBlockParam> system;
@@ -120,7 +124,7 @@ public final class ClaudeAgent {
 		this.config = config;
 		this.model = ClaudeModel.of(config.model());
 		this.listener = listener;
-		this.approver = approver;
+		this.toolRunner = new ToolCallRunner(toolbox, config.approvalMode(), listener, approver, () -> cancelled);
 
 		AnthropicOkHttpClient.Builder builder = AnthropicOkHttpClient.builder()
 				.apiKey(config.apiKey())
@@ -139,14 +143,7 @@ public final class ClaudeAgent {
 				.build());
 	}
 
-	/**
-	 * Sends a user message and runs the agent until it is done. Blocks the calling thread.
-	 *
-	 * @param userMessage
-	 * 		Message from the user.
-	 *
-	 * @return How the run ended.
-	 */
+	@Override
 	@Nonnull
 	public AgentTurn send(@Nonnull String userMessage) {
 		synchronized (history) {
@@ -155,12 +152,7 @@ public final class ClaudeAgent {
 		return run();
 	}
 
-	/**
-	 * Continues the conversation from where it stopped, without a new user message. Use it after a run that was
-	 * cancelled, failed for a transient reason or hit a limit. Blocks the calling thread.
-	 *
-	 * @return How the run ended.
-	 */
+	@Override
 	@Nonnull
 	public AgentTurn resume() {
 		synchronized (history) {
@@ -173,10 +165,7 @@ public final class ClaudeAgent {
 		return run();
 	}
 
-	/**
-	 * Stops the agent as soon as possible. Safe to call from any thread.
-	 * The conversation stays valid and can be continued with {@link #send(String)} or {@link #resume()}.
-	 */
+	@Override
 	public void cancel() {
 		cancelled = true;
 		toolbox.context().setCancelled(true);
@@ -191,25 +180,19 @@ public final class ClaudeAgent {
 		}
 	}
 
-	/**
-	 * @return {@code true} while {@link #send(String)} or {@link #resume()} is in progress.
-	 */
+	@Override
 	public boolean isRunning() {
 		return running;
 	}
 
-	/**
-	 * @return Number of messages in the conversation.
-	 */
+	@Override
 	public int messageCount() {
 		synchronized (history) {
 			return history.size();
 		}
 	}
 
-	/**
-	 * @return Token usage of the conversation so far.
-	 */
+	@Override
 	@Nonnull
 	public AgentListener.Usage usage() {
 		Double cost = null;
@@ -412,9 +395,6 @@ public final class ClaudeAgent {
 	 */
 	@Nonnull
 	private ToolResult execute(@Nonnull BetaToolUseBlock call) {
-		if (cancelled)
-			return ToolResult.error("Cancelled by the user before this tool ran.");
-
 		// Tool inputs are streamed without server-side validation, so the input is not trusted to be an object.
 		JsonElement input;
 		try {
@@ -422,42 +402,7 @@ public final class ClaudeAgent {
 		} catch (RuntimeException ex) {
 			input = null;
 		}
-		String argumentsJson = input == null ? "{}" : input.toString();
-		listener.onToolCallReady(call.id(), call.name(), argumentsJson);
-		long start = System.currentTimeMillis();
-
-		ToolResult result;
-		AgentTool tool = toolbox.tool(call.name());
-		if (input == null || !input.isJsonObject()) {
-			JsonObject invalid = new JsonObject();
-			invalid.addProperty("INVALID_JSON", String.valueOf(call._input()));
-			result = ToolResult.error("The tool input was not a JSON object and the tool was not run: " + invalid);
-		} else if (tool != null && !tool.readOnly() && config.approvalMode() != AgentConfig.ApprovalMode.ALLOW_CHANGES) {
-			result = gate(tool, input.getAsJsonObject());
-		} else {
-			result = toolbox.call(call.name(), input.getAsJsonObject());
-		}
-		listener.onToolCallFinished(call.id(), result.text(), result.error(), System.currentTimeMillis() - start);
-		return result;
-	}
-
-	/**
-	 * Applies the approval policy to a modifying tool call.
-	 */
-	@Nonnull
-	private ToolResult gate(@Nonnull AgentTool tool, @Nonnull JsonObject input) {
-		if (config.approvalMode() == AgentConfig.ApprovalMode.READ_ONLY)
-			return ToolResult.error("Not run: the user has restricted you to read-only tools, and '" + tool.name() +
-					"' modifies the workspace. Describe the change you would make instead.");
-		if (approver == null)
-			return ToolResult.error("Not run: '" + tool.name() + "' modifies the workspace and there is nobody to approve it.");
-		ToolApprover.Decision decision = approver.approve(tool, new ToolArgs(input));
-		if (cancelled)
-			return ToolResult.error("Cancelled by the user before this tool ran.");
-		if (!decision.allowed())
-			return ToolResult.error("Not run: the user declined this call to '" + tool.name() + "'." +
-					(decision.reason() == null || decision.reason().isBlank() ? "" : " They said: " + decision.reason()));
-		return toolbox.call(tool.name(), input);
+		return toolRunner.run(call.id(), call.name(), input, String.valueOf(call._input()));
 	}
 
 	private void record(@Nonnull BetaUsage usage) {
@@ -533,9 +478,7 @@ public final class ClaudeAgent {
 		return message == null || message.isBlank() ? t.getClass().getSimpleName() : message;
 	}
 
-	/**
-	 * @return The conversation as JSON, for persisting it across restarts of the host application.
-	 */
+	@Override
 	@Nonnull
 	public String exportConversation() {
 		synchronized (history) {
@@ -547,15 +490,7 @@ public final class ClaudeAgent {
 		}
 	}
 
-	/**
-	 * Replaces the conversation with one exported by {@link #exportConversation()}.
-	 *
-	 * @param json
-	 * 		Exported conversation.
-	 *
-	 * @throws IllegalArgumentException
-	 * 		When the JSON is not an exported conversation.
-	 */
+	@Override
 	public void importConversation(@Nonnull String json) {
 		List<BetaMessageParam> restored;
 		try {
@@ -570,10 +505,7 @@ public final class ClaudeAgent {
 		}
 	}
 
-	/**
-	 * @return Text of the agent's most recent reply, or an empty optional when it has not replied yet.
-	 * Convenient for callers that only want the final answer of a run.
-	 */
+	@Override
 	@Nonnull
 	public Optional<String> lastReply() {
 		return Optional.ofNullable(lastReply);

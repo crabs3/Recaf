@@ -2,9 +2,10 @@ package software.coley.recaf.android;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import software.coley.recaf.agent.chat.ApprovalMode;
 import software.coley.recaf.agent.claude.AgentConfig;
-import software.coley.recaf.agent.claude.AgentListener;
-import software.coley.recaf.agent.claude.AgentTurn;
+import software.coley.recaf.agent.chat.AgentListener;
+import software.coley.recaf.agent.chat.AgentTurn;
 import software.coley.recaf.agent.claude.ClaudeAgent;
 import software.coley.recaf.agent.mcp.McpHttpServer;
 import software.coley.recaf.agent.mcp.McpServer;
@@ -193,7 +194,7 @@ public final class AgentChecks {
 
 			List<String> events = new ArrayList<>();
 			AgentConfig config = new AgentConfig("device-key", "http://127.0.0.1:" + socket.getLocalPort(), "claude-opus-5-5",
-					"medium", 64_000, true, AgentConfig.ApprovalMode.ALLOW_CHANGES);
+					"medium", 64_000, true, ApprovalMode.ALLOW_CHANGES);
 			ClaudeAgent agent = new ClaudeAgent(toolbox, config, new AgentListener() {
 				@Override
 				public void onText(String text) {

@@ -9,14 +9,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import software.coley.recaf.agent.chat.ApprovalMode
 import software.coley.recaf.agent.claude.AgentConfig
-import software.coley.recaf.agent.claude.AgentListener
-import software.coley.recaf.agent.claude.AgentTurn
+import software.coley.recaf.agent.chat.AgentListener
+import software.coley.recaf.agent.chat.AgentTurn
 import software.coley.recaf.agent.claude.ClaudeAgent
-import software.coley.recaf.agent.claude.ToolApprover
+import software.coley.recaf.agent.chat.ToolApprover
 import software.coley.recaf.agent.tool.AgentTool
 import software.coley.recaf.agent.tool.ToolArgs
 import java.util.concurrent.CompletableFuture
@@ -173,7 +173,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 		running = true
 		AgentService.runStarted(getApplication()) { main.post { stop() } }
 		viewModelScope.launch {
-			val turn = withContext(Dispatchers.IO) {
+			// Tools run on the agent's thread, and some of them recurse deeply.
+			val turn = withContext(RecafSession.work) {
 				runCatching { action(agentFor(settings)) }
 					.getOrElse { AgentTurn(AgentTurn.Outcome.ERROR, it.toString()) }
 			}
@@ -227,5 +228,5 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 	}
 
 	/** @return The approval mode the agent runs with, for display. */
-	fun approvalMode(): AgentConfig.ApprovalMode = SettingsStore.settings.value.approvalMode
+	fun approvalMode(): ApprovalMode = SettingsStore.settings.value.approvalMode
 }

@@ -4,9 +4,10 @@ import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
 import software.coley.recaf.Bootstrap;
 import software.coley.recaf.Recaf;
+import software.coley.recaf.agent.chat.ApprovalMode;
 import software.coley.recaf.agent.claude.AgentConfig;
-import software.coley.recaf.agent.claude.AgentListener;
-import software.coley.recaf.agent.claude.AgentTurn;
+import software.coley.recaf.agent.chat.AgentListener;
+import software.coley.recaf.agent.chat.AgentTurn;
 import software.coley.recaf.agent.claude.ClaudeAgent;
 import software.coley.recaf.agent.claude.ClaudeModel;
 import software.coley.recaf.agent.mcp.McpHttpServer;
@@ -162,7 +163,7 @@ public final class AgentCli implements AutoCloseable {
 			return false;
 		}
 		AgentConfig config = new AgentConfig(apiKey, options.baseUrl, options.model, options.effort, AgentConfig.DEFAULT_MAX_TOKENS, true,
-				options.allowChanges ? AgentConfig.ApprovalMode.ALLOW_CHANGES : AgentConfig.ApprovalMode.READ_ONLY);
+				options.allowChanges ? ApprovalMode.ALLOW_CHANGES : ApprovalMode.READ_ONLY);
 		ClaudeAgent agent = new ClaudeAgent(toolbox, config, new AgentListener() {
 			private boolean midLine;
 

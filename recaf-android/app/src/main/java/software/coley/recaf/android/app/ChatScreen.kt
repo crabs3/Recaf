@@ -81,7 +81,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.gson.JsonParser
 import kotlinx.coroutines.launch
-import software.coley.recaf.agent.claude.AgentListener
+import software.coley.recaf.agent.chat.AgentListener
 import software.coley.recaf.agent.prompt.Playbooks
 
 /**
@@ -111,7 +111,7 @@ fun ChatScreen(navigator: Navigator, agent: AgentViewModel) {
 		if (uri != null) scope.launch {
 			val result = RecafSession.openUri(uri)
 			result.onSuccess { agent.newConversation() }
-			context.toast(result.fold({ "Opened $it" }, { "Could not open the file: ${it.message}" }))
+			if (result.isSuccess) context.toast("Opened ${result.getOrNull()}")
 		}
 	}
 	val exportDocument = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri: Uri? ->

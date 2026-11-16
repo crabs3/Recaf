@@ -7,6 +7,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import software.coley.recaf.agent.chat.ApprovalMode
 import software.coley.recaf.agent.claude.AgentConfig
 import software.coley.recaf.agent.claude.ClaudeModel
 import software.coley.recaf.agent.mcp.McpHttpServer
@@ -35,7 +36,7 @@ data class Settings(
 	val baseUrl: String = "",
 	val model: String = ClaudeModel.DEFAULT.id(),
 	val effort: String = AgentConfig.DEFAULT_EFFORT,
-	val approvalMode: AgentConfig.ApprovalMode = AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES,
+	val approvalMode: ApprovalMode = ApprovalMode.ASK_BEFORE_CHANGES,
 	val refusalFallback: Boolean = true,
 	val mcpPort: Int = McpHttpServer.DEFAULT_PORT,
 	val mcpToken: String = "",
@@ -68,8 +69,8 @@ object SettingsStore {
 			baseUrl = prefs.getString("base_url", null) ?: "",
 			model = prefs.getString("model", null) ?: ClaudeModel.DEFAULT.id(),
 			effort = prefs.getString("effort", null) ?: AgentConfig.DEFAULT_EFFORT,
-			approvalMode = runCatching { AgentConfig.ApprovalMode.valueOf(prefs.getString("approval", "")!!) }
-				.getOrDefault(AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES),
+			approvalMode = runCatching { ApprovalMode.valueOf(prefs.getString("approval", "")!!) }
+				.getOrDefault(ApprovalMode.ASK_BEFORE_CHANGES),
 			refusalFallback = prefs.getBoolean("refusal_fallback", true),
 			mcpPort = prefs.getInt("mcp_port", McpHttpServer.DEFAULT_PORT),
 			mcpToken = decrypt(prefs.getString("mcp_token", null)),

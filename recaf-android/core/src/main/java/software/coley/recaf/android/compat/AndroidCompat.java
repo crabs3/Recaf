@@ -22,6 +22,11 @@ import java.util.regex.Pattern;
  * @author Recaf Android port
  */
 public final class AndroidCompat {
+	/**
+	 * Stack size for threads that run decompilers, assemblers and analyses, which recurse deeply.
+	 * The memory is only committed as far as a thread actually uses it.
+	 */
+	public static final long WORKER_STACK_SIZE = 32L * 1024 * 1024;
 	/** Equivalent of {@code StandardCharsets.UTF_32}. */
 	public static final Charset UTF_32 = Charset.forName("UTF-32");
 	/** Equivalent of {@code StandardCharsets.UTF_32BE}. */

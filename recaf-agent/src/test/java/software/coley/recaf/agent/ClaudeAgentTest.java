@@ -5,11 +5,12 @@ import com.google.gson.JsonObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import software.coley.recaf.agent.chat.ApprovalMode;
 import software.coley.recaf.agent.claude.AgentConfig;
-import software.coley.recaf.agent.claude.AgentListener;
-import software.coley.recaf.agent.claude.AgentTurn;
+import software.coley.recaf.agent.chat.AgentListener;
+import software.coley.recaf.agent.chat.AgentTurn;
 import software.coley.recaf.agent.claude.ClaudeAgent;
-import software.coley.recaf.agent.claude.ToolApprover;
+import software.coley.recaf.agent.chat.ToolApprover;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -63,7 +64,7 @@ class ClaudeAgentTest extends AgentTestBase {
 		api.close();
 	}
 
-	private ClaudeAgent agent(AgentConfig.ApprovalMode mode, ToolApprover approver) {
+	private ClaudeAgent agent(ApprovalMode mode, ToolApprover approver) {
 		AgentConfig config = new AgentConfig("test-key", api.baseUrl(), "claude-opus-5-5", "medium", 64_000, true, mode);
 		return new ClaudeAgent(toolbox, config, listener, approver);
 	}
@@ -73,7 +74,7 @@ class ClaudeAgentTest extends AgentTestBase {
 		api.respond("tool_use", thinking("Looking at the class first."),
 						toolUse("toolu_1", "get_class_info", "{\"class\": \"sample.Hello\"}"))
 				.respond("end_turn", text("sample/Hello implements Runnable."));
-		ClaudeAgent agent = agent(AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES, null);
+		ClaudeAgent agent = agent(ApprovalMode.ASK_BEFORE_CHANGES, null);
 
 		AgentTurn turn = agent.send("What does Hello implement?");
 		assertEquals(AgentTurn.Outcome.COMPLETED, turn.outcome(), String.valueOf(turn.detail()));
@@ -143,7 +144,7 @@ class ClaudeAgentTest extends AgentTestBase {
 						toolUse("toolu_b", "get_class_info", "{\"class\": \"missing/Type\"}"),
 						toolUse("toolu_c", "no_such_tool", "{}"))
 				.respond("end_turn", text("Done."));
-		assertEquals(AgentTurn.Outcome.COMPLETED, agent(AgentConfig.ApprovalMode.ALLOW_CHANGES, null).send("Go").outcome());
+		assertEquals(AgentTurn.Outcome.COMPLETED, agent(ApprovalMode.ALLOW_CHANGES, null).send("Go").outcome());
 
 		JsonArray results = api.requests.get(1).getAsJsonArray("messages").get(2).getAsJsonObject().getAsJsonArray("content");
 		assertEquals(3, results.size());
@@ -159,7 +160,7 @@ class ClaudeAgentTest extends AgentTestBase {
 		// Declined by the user
 		api.respond("tool_use", toolUse("toolu_1", "set_comment", comment)).respond("end_turn", text("ok"));
 		List<String> asked = new ArrayList<>();
-		ClaudeAgent declining = agent(AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES, (tool, args) -> {
+		ClaudeAgent declining = agent(ApprovalMode.ASK_BEFORE_CHANGES, (tool, args) -> {
 			asked.add(tool.name() + ":" + args.string("comment"));
 			return new ToolApprover.Decision(false, "not now");
 		});
@@ -171,7 +172,7 @@ class ClaudeAgentTest extends AgentTestBase {
 
 		// Approved by the user
 		api.respond("tool_use", toolUse("toolu_2", "set_comment", comment)).respond("end_turn", text("ok"));
-		agent(AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES, (tool, args) -> ToolApprover.Decision.ALLOW).send("Comment it");
+		agent(ApprovalMode.ASK_BEFORE_CHANGES, (tool, args) -> ToolApprover.Decision.ALLOW).send("Comment it");
 		assertTrue(call("get_comments", "class", "sample.Hello").contains("entry"));
 
 		// Read-only mode never asks. Reading still works, and so does taking notes: findings are not changes.
@@ -179,7 +180,7 @@ class ClaudeAgentTest extends AgentTestBase {
 		api.respond("tool_use", toolUse("toolu_3", "set_comment", comment.replace("entry", "changed")),
 						toolUse("toolu_4", "record_finding", record), toolUse("toolu_5", "list_findings", "{}"))
 				.respond("end_turn", text("ok"));
-		agent(AgentConfig.ApprovalMode.READ_ONLY, (tool, args) -> fail("Must not ask in read-only mode")).send("Comment it");
+		agent(ApprovalMode.READ_ONLY, (tool, args) -> fail("Must not ask in read-only mode")).send("Comment it");
 		JsonArray results = api.requests.get(5).getAsJsonArray("messages").get(2).getAsJsonObject().getAsJsonArray("content");
 		assertTrue(results.get(0).getAsJsonObject().get("content").getAsString().contains("read-only"));
 		assertTrue(results.get(1).getAsJsonObject().get("content").getAsString().contains("Recorded finding"));
@@ -192,7 +193,7 @@ class ClaudeAgentTest extends AgentTestBase {
 	void refusedResponsesAreNotActedOn() {
 		api.respond("refusal", toolUse("toolu_1", "record_finding", "{\"severity\": \"info\", \"title\": \"t\", \"detail\": \"d\"}"))
 				.respond("end_turn", text("Here is a different answer."));
-		ClaudeAgent agent = agent(AgentConfig.ApprovalMode.ALLOW_CHANGES, null);
+		ClaudeAgent agent = agent(ApprovalMode.ALLOW_CHANGES, null);
 		AgentTurn turn = agent.send("Analyze");
 		assertEquals(AgentTurn.Outcome.REFUSED, turn.outcome());
 		assertTrue(turn.detail().contains("cyber"), turn.detail());
@@ -208,7 +209,7 @@ class ClaudeAgentTest extends AgentTestBase {
 	void cutOffToolCallsAreReportedBackInsteadOfRun() {
 		api.respond("max_tokens", toolUse("toolu_1", "record_finding", "{\"severity\": \"info\", \"title\": \"t\"}"))
 				.respond("end_turn", text("Recovered."));
-		ClaudeAgent agent = agent(AgentConfig.ApprovalMode.ALLOW_CHANGES, null);
+		ClaudeAgent agent = agent(ApprovalMode.ALLOW_CHANGES, null);
 		assertEquals(AgentTurn.Outcome.COMPLETED, agent.send("Go").outcome());
 		assertTrue(toolResult(1).contains("cut off"));
 		assertTrue(toolbox.context().state().findings().isEmpty());
@@ -220,7 +221,7 @@ class ClaudeAgentTest extends AgentTestBase {
 	@Test
 	void cancellingMidResponseKeepsTheConversationUsable() throws Exception {
 		api.respondAndStall(text("This reply never finishes"), text("because the user stops it."));
-		ClaudeAgent agent = agent(AgentConfig.ApprovalMode.ALLOW_CHANGES, null);
+		ClaudeAgent agent = agent(ApprovalMode.ALLOW_CHANGES, null);
 		CompletableFuture<AgentTurn> running = CompletableFuture.supplyAsync(() -> agent.send("Start"));
 		assertTrue(api.stalled.await(20, TimeUnit.SECONDS));
 		assertTrue(agent.isRunning());
@@ -237,7 +238,7 @@ class ClaudeAgentTest extends AgentTestBase {
 
 	@Test
 	void apiFailuresMapToOutcomesAndAllowRetry() {
-		ClaudeAgent agent = agent(AgentConfig.ApprovalMode.ALLOW_CHANGES, null);
+		ClaudeAgent agent = agent(ApprovalMode.ALLOW_CHANGES, null);
 		api.fail(401, "authentication_error", "invalid x-api-key");
 		AgentTurn unauthorized = agent.send("Hello");
 		assertEquals(AgentTurn.Outcome.AUTH_ERROR, unauthorized.outcome());
@@ -260,11 +261,11 @@ class ClaudeAgentTest extends AgentTestBase {
 	void conversationsSurviveExportAndImport() {
 		api.respond("tool_use", thinking("Checking."), toolUse("toolu_1", "workspace_info", "{}"))
 				.respond("end_turn", text("It has two classes."));
-		ClaudeAgent original = agent(AgentConfig.ApprovalMode.ALLOW_CHANGES, null);
+		ClaudeAgent original = agent(ApprovalMode.ALLOW_CHANGES, null);
 		original.send("How many classes?");
 		String exported = original.exportConversation();
 
-		ClaudeAgent restored = agent(AgentConfig.ApprovalMode.ALLOW_CHANGES, null);
+		ClaudeAgent restored = agent(ApprovalMode.ALLOW_CHANGES, null);
 		restored.importConversation(exported);
 		assertEquals(original.messageCount(), restored.messageCount());
 		api.respond("end_turn", text("Yes."));
