@@ -49,7 +49,7 @@ public final class FindingTools implements ToolProvider {
 						.optString("class", "Name of the class the finding is about, if it is about one.")
 						.optString("member", "Name and descriptor of the field or method the finding is about, if it is about one. " +
 								"For example 'decrypt(Ljava/lang/String;)Ljava/lang/String;'."))
-				.mutating()
+				// Not marked as mutating: findings are the agent's notes, they leave the workspace as it is.
 				.handler(args -> {
 					String className = args.optString("class", null);
 					if (className != null && !className.isBlank())
@@ -100,7 +100,6 @@ public final class FindingTools implements ToolProvider {
 		return AgentTool.builder("remove_finding")
 				.description("Remove a recorded finding that turned out to be wrong or redundant.")
 				.schema(ToolSchema.object().integer("id", "Number of the finding, as shown by list_findings."))
-				.mutating()
 				.handler(args -> {
 					int id = args.integer("id");
 					if (!context.state().removeFinding(id))

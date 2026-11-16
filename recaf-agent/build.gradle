@@ -20,3 +20,16 @@ tasks.withType(Test).configureEach {
     // Decompilers and the embedded HTTP server in tests benefit from a little more room than the default.
     maxHeapSize = '2048m'
 }
+
+// Command line entry point: ./gradlew :recaf-agent:run --args="app.jar --analyze"
+apply plugin: 'application'
+
+application {
+    mainClass = 'software.coley.recaf.agent.cli.AgentCli'
+}
+
+tasks.named('run') {
+    // Resolve the input relative to where gradle was invoked rather than to this module.
+    workingDir = rootProject.projectDir
+    standardInput = System.in
+}

@@ -10,7 +10,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 /**
- * State that outlives individual tool calls: the findings an agent records as it works.
+ * State that outlives individual tool calls: the findings an agent records as it works, and whether the
+ * modifications made so far have been exported.
  * <p>
  * Findings are the agent's durable output. Unlike conversation text they survive context compaction and can be
  * listed again, and a user interface can show them as they arrive.
@@ -21,6 +22,7 @@ public final class AgentState {
 	private final List<Finding> findings = new CopyOnWriteArrayList<>();
 	private final List<Consumer<List<Finding>>> listeners = new CopyOnWriteArrayList<>();
 	private final AtomicInteger nextId = new AtomicInteger(1);
+	private volatile boolean exported;
 
 	/**
 	 * @param severity
@@ -75,6 +77,22 @@ public final class AgentState {
 	@Nonnull
 	public List<Finding> findings() {
 		return new ArrayList<>(findings);
+	}
+
+	/**
+	 * @return {@code true} when the workspace was exported and has not been modified since, which means
+	 * replacing it loses nothing.
+	 */
+	public boolean isExported() {
+		return exported;
+	}
+
+	/**
+	 * @param exported
+	 *        {@code true} after an export, {@code false} after anything that modifies the workspace.
+	 */
+	public void setExported(boolean exported) {
+		this.exported = exported;
 	}
 
 	/**

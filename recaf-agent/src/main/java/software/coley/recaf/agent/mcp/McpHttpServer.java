@@ -100,7 +100,9 @@ public final class McpHttpServer implements AutoCloseable {
 
 		ServerSocket socket = new ServerSocket();
 		socket.setReuseAddress(true);
-		InetAddress address = loopbackOnly ? InetAddress.getLoopbackAddress() : null;
+		// The IPv4 loopback address, spelled out: 'InetAddress.getLoopbackAddress()' is '::1' on Android, where
+		// a server bound to it is out of reach for clients connecting to 127.0.0.1, 'adb forward' among them.
+		InetAddress address = loopbackOnly ? InetAddress.getByAddress("localhost", new byte[]{127, 0, 0, 1}) : null;
 		socket.bind(address == null ? new InetSocketAddress(port) : new InetSocketAddress(address, port));
 		serverSocket = socket;
 		workers = new ThreadPoolExecutor(0, MAX_CONNECTIONS, 30, TimeUnit.SECONDS, new SynchronousQueue<>(), runnable -> {

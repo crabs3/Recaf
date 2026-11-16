@@ -87,7 +87,9 @@ fun SettingsScreen(navigator: Navigator) {
 				keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
 				trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide" else "Show") } },
 				supportingText = {
-					Text("Stored encrypted on this device and sent only to the Anthropic API. Create one at console.anthropic.com.")
+					Text(if (settings.baseUrl.isBlank())
+						"Stored encrypted on this device and sent only to the Anthropic API. Create one at console.anthropic.com."
+					else "Stored encrypted on this device and sent to the API endpoint set below.")
 				},
 			)
 
@@ -130,6 +132,20 @@ fun SettingsScreen(navigator: Navigator) {
 				}
 				Switch(checked = settings.refusalFallback, onCheckedChange = { value -> SettingsStore.update { it.copy(refusalFallback = value) } })
 			}
+
+			SectionTitle("API endpoint")
+			OutlinedTextField(
+				value = settings.baseUrl,
+				onValueChange = { value -> SettingsStore.update { it.copy(baseUrl = value.trim()) } },
+				modifier = Modifier.fillMaxWidth(),
+				placeholder = { Text("https://api.anthropic.com") },
+				singleLine = true,
+				keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+				supportingText = {
+					Text("Leave empty to use Anthropic's API. Set it only when your requests go through a gateway: " +
+						"conversations and the API key are then sent to this address.")
+				},
+			)
 
 			HorizontalDivider(Modifier.padding(top = 12.dp))
 			Text("Recaf ${RecafBuildConfig.VERSION} for Android", style = MaterialTheme.typography.bodySmall,

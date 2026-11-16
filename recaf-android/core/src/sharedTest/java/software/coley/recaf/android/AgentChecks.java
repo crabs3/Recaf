@@ -168,7 +168,7 @@ public final class AgentChecks {
 		AgentToolbox toolbox = toolbox(workDir);
 		CoreChecks.openSample("hello.jar");
 		List<String> requests = new ArrayList<>();
-		try (ServerSocket socket = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+		try (ServerSocket socket = new ServerSocket(0, 8, InetAddress.getByAddress(new byte[]{127, 0, 0, 1}))) {
 			Thread server = new Thread(() -> {
 				String[] responses = {
 						sse("tool_use", "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"get_class_info\",\"input\":{}}",

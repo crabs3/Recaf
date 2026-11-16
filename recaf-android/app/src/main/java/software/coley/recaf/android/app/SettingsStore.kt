@@ -25,12 +25,14 @@ import javax.crypto.spec.GCMParameterSpec
  * @property effort How thoroughly the agent works.
  * @property approvalMode Policy for tool calls that modify the workspace.
  * @property refusalFallback Whether a declined request may be retried on another model.
+ * @property baseUrl Address of the API to talk to instead of Anthropic's own, empty for the default.
  * @property mcpPort Port of the MCP server.
  * @property mcpToken Access token of the MCP server.
  * @property mcpNetwork Whether the MCP server accepts connections from other devices.
  */
 data class Settings(
 	val apiKey: String = "",
+	val baseUrl: String = "",
 	val model: String = ClaudeModel.DEFAULT.id(),
 	val effort: String = AgentConfig.DEFAULT_EFFORT,
 	val approvalMode: AgentConfig.ApprovalMode = AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES,
@@ -41,7 +43,7 @@ data class Settings(
 ) {
 	/** @return Configuration of an agent with these settings. */
 	fun agentConfig(): AgentConfig =
-		AgentConfig(apiKey, null, model, effort, AgentConfig.DEFAULT_MAX_TOKENS, refusalFallback, approvalMode)
+		AgentConfig(apiKey, baseUrl.ifBlank { null }, model, effort, AgentConfig.DEFAULT_MAX_TOKENS, refusalFallback, approvalMode)
 }
 
 /**
@@ -63,6 +65,7 @@ object SettingsStore {
 		prefs = context.getSharedPreferences("recaf_settings", Context.MODE_PRIVATE)
 		var loaded = Settings(
 			apiKey = decrypt(prefs.getString("api_key", null)),
+			baseUrl = prefs.getString("base_url", null) ?: "",
 			model = prefs.getString("model", null) ?: ClaudeModel.DEFAULT.id(),
 			effort = prefs.getString("effort", null) ?: AgentConfig.DEFAULT_EFFORT,
 			approvalMode = runCatching { AgentConfig.ApprovalMode.valueOf(prefs.getString("approval", "")!!) }
@@ -96,6 +99,7 @@ object SettingsStore {
 	private fun save(settings: Settings) {
 		prefs.edit()
 			.putString("api_key", encrypt(settings.apiKey))
+			.putString("base_url", settings.baseUrl)
 			.putString("model", settings.model)
 			.putString("effort", settings.effort)
 			.putString("approval", settings.approvalMode.name)

@@ -72,6 +72,15 @@ public final class AgentToolbox {
 		AgentToolbox toolbox = new AgentToolbox(context);
 		for (ToolProvider provider : StandardTools.providers(context))
 			toolbox.register(provider);
+		// Track whether the workspace holds modifications that an export has not captured yet.
+		toolbox.addListener(new ToolCallListener() {
+			@Override
+			public void onToolResult(@Nonnull AgentTool tool, @Nonnull ToolArgs args, @Nonnull ToolResult result, long durationMillis) {
+				if (result.error() || tool.readOnly())
+					return;
+				context.state().setExported(tool.name().equals("export_workspace"));
+			}
+		});
 		return toolbox;
 	}
 

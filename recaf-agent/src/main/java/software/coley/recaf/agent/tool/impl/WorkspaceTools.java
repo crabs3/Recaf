@@ -136,7 +136,8 @@ public final class WorkspaceTools implements ToolProvider {
 						throw new ToolException("There is no file at '" + path + "'.");
 
 					Workspace current = context.workspaceOrNull();
-					if (current != null && countModified(current.getPrimaryResource()) > 0 && !args.optBool("discard_changes", false))
+					if (current != null && countModified(current.getPrimaryResource()) > 0
+							&& !context.state().isExported() && !args.optBool("discard_changes", false))
 						throw new ToolException("The open workspace has modifications that were not exported. " +
 								"Export it first (export_workspace), or pass discard_changes=true to drop them.");
 

@@ -19,6 +19,7 @@ ext.desktopOnlySources = [
         'software/coley/recaf/Main.java',
         'software/coley/recaf/ExitDebugLoggingHook.java',
         'software/coley/recaf/launch/**',
+        'software/coley/recaf/agent/cli/**',
         'software/coley/recaf/util/JdkValidation.java',
         'software/coley/recaf/util/DesktopUtil.java',
         // JDK internals that Android neither has nor needs

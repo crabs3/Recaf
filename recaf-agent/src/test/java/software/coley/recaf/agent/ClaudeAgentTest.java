@@ -155,32 +155,36 @@ class ClaudeAgentTest extends AgentTestBase {
 
 	@Test
 	void modifyingToolsFollowTheApprovalMode() {
-		String record = "{\"severity\": \"info\", \"title\": \"t\", \"detail\": \"d\"}";
+		String comment = "{\"class\": \"sample.Hello\", \"comment\": \"entry\"}";
 		// Declined by the user
-		api.respond("tool_use", toolUse("toolu_1", "record_finding", record)).respond("end_turn", text("ok"));
+		api.respond("tool_use", toolUse("toolu_1", "set_comment", comment)).respond("end_turn", text("ok"));
 		List<String> asked = new ArrayList<>();
 		ClaudeAgent declining = agent(AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES, (tool, args) -> {
-			asked.add(tool.name() + args.string("title"));
+			asked.add(tool.name() + ":" + args.string("comment"));
 			return new ToolApprover.Decision(false, "not now");
 		});
-		declining.send("Record it");
-		assertEquals(List.of("record_findingt"), asked);
+		declining.send("Comment it");
+		assertEquals(List.of("set_comment:entry"), asked);
 		String declined = toolResult(1);
 		assertTrue(declined.contains("declined") && declined.contains("not now"), declined);
-		assertTrue(toolbox.context().state().findings().isEmpty());
+		assertTrue(call("get_comments", "class", "sample.Hello").startsWith("No comments"));
 
 		// Approved by the user
-		api.respond("tool_use", toolUse("toolu_2", "record_finding", record)).respond("end_turn", text("ok"));
-		agent(AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES, (tool, args) -> ToolApprover.Decision.ALLOW).send("Record it");
-		assertEquals(1, toolbox.context().state().findings().size());
+		api.respond("tool_use", toolUse("toolu_2", "set_comment", comment)).respond("end_turn", text("ok"));
+		agent(AgentConfig.ApprovalMode.ASK_BEFORE_CHANGES, (tool, args) -> ToolApprover.Decision.ALLOW).send("Comment it");
+		assertTrue(call("get_comments", "class", "sample.Hello").contains("entry"));
 
-		// Read-only mode never asks, reading tools still run
-		api.respond("tool_use", toolUse("toolu_3", "record_finding", record), toolUse("toolu_4", "list_findings", "{}"))
+		// Read-only mode never asks. Reading still works, and so does taking notes: findings are not changes.
+		String record = "{\"severity\": \"info\", \"title\": \"t\", \"detail\": \"d\"}";
+		api.respond("tool_use", toolUse("toolu_3", "set_comment", comment.replace("entry", "changed")),
+						toolUse("toolu_4", "record_finding", record), toolUse("toolu_5", "list_findings", "{}"))
 				.respond("end_turn", text("ok"));
-		agent(AgentConfig.ApprovalMode.READ_ONLY, (tool, args) -> fail("Must not ask in read-only mode")).send("Record it");
+		agent(AgentConfig.ApprovalMode.READ_ONLY, (tool, args) -> fail("Must not ask in read-only mode")).send("Comment it");
 		JsonArray results = api.requests.get(5).getAsJsonArray("messages").get(2).getAsJsonObject().getAsJsonArray("content");
 		assertTrue(results.get(0).getAsJsonObject().get("content").getAsString().contains("read-only"));
-		assertTrue(results.get(1).getAsJsonObject().get("content").getAsString().contains("1 findings"));
+		assertTrue(results.get(1).getAsJsonObject().get("content").getAsString().contains("Recorded finding"));
+		assertTrue(results.get(2).getAsJsonObject().get("content").getAsString().contains("1 finding"));
+		assertFalse(call("get_comments", "class", "sample.Hello").contains("changed"));
 		assertEquals(1, toolbox.context().state().findings().size());
 	}
 

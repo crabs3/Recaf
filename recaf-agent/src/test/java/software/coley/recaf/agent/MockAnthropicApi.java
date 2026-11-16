@@ -80,7 +80,7 @@ final class MockAnthropicApi implements AutoCloseable {
 		synchronized (requests) {
 			requests.add(JsonParser.parseString(body).getAsJsonObject());
 			betaHeaders.add(String.join(",", exchange.getRequestHeaders().getOrDefault("anthropic-beta", List.of())));
-			// The SDK sends an API key either as 'X-Api-Key' or as a bearer token, depending on its API version.
+			// How a key travels is the SDK's business: version 3.9 sends it as a bearer token, older ones as 'X-Api-Key'.
 			String key = exchange.getRequestHeaders().getFirst("x-api-key");
 			String authorization = exchange.getRequestHeaders().getFirst("authorization");
 			if (key == null && authorization != null && authorization.startsWith("Bearer "))
