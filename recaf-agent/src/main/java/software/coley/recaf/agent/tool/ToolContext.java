@@ -23,6 +23,8 @@ public final class ToolContext {
 	private final Path exportDirectory;
 	private final List<Path> inputRoots;
 	private final AtomicBoolean cancelled = new AtomicBoolean();
+	private volatile AgentToolbox toolbox;
+	private volatile boolean unrestrictedScripts;
 
 	/**
 	 * @param recaf
@@ -109,6 +111,46 @@ public final class ToolContext {
 	@Nonnull
 	public List<Path> inputRoots() {
 		return inputRoots;
+	}
+
+	/**
+	 * @return The toolbox whose tools operate in this context, which lets tools call other tools.
+	 */
+	@Nonnull
+	public AgentToolbox toolbox() {
+		AgentToolbox toolbox = this.toolbox;
+		if (toolbox == null)
+			throw new IllegalStateException("The context is not attached to a toolbox");
+		return toolbox;
+	}
+
+	/**
+	 * @param toolbox
+	 * 		Toolbox whose tools operate in this context.
+	 */
+	void attach(@Nonnull AgentToolbox toolbox) {
+		this.toolbox = toolbox;
+	}
+
+	/**
+	 * @return {@code true} when scripts may run without the scripting sandbox.
+	 *
+	 * @see #setUnrestrictedScripts(boolean)
+	 */
+	public boolean unrestrictedScripts() {
+		return unrestrictedScripts;
+	}
+
+	/**
+	 * Controls whether scripts that run with the full privileges of the Recaf process are allowed, which is the
+	 * case for Recaf's native Java scripts. Off by default: the program being analyzed is untrusted input, and an
+	 * agent that was misled by it should not be one tool call away from arbitrary code execution on the host.
+	 *
+	 * @param unrestrictedScripts
+	 *        {@code true} to allow unrestricted scripts.
+	 */
+	public void setUnrestrictedScripts(boolean unrestrictedScripts) {
+		this.unrestrictedScripts = unrestrictedScripts;
 	}
 
 	/**

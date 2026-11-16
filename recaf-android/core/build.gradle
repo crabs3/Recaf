@@ -25,9 +25,9 @@ apply from: 'source-patches.gradle'
 //   1. Overrides  - Any file under 'src/main/java' whose path matches a desktop source file replaces it.
 //                   These are the classes that rely on JDK features Android does not have (Weld, javax.tools, ...).
 //   2. Removals   - Desktop-only packages listed in 'desktopOnlySources' are dropped (attach API, launcher, ...).
-//   3. Retargeting - 'java.lang.foreign' does not exist on Android. Source references are rewritten to the shim in
-//                   'software.coley.recaf.android.foreign', and the LL-Java-Zip dependency is bytecode-relocated
-//                   onto the same shim (see 'retargetLljzip').
+//   3. Retargeting - Where the gap is inside a dependency, the dependency's bytecode is rewritten at build time
+//                   (see 'retargetJar'). 'java.lang.foreign' does not exist on Android, so both the desktop sources
+//                   and LL-Java-Zip are moved onto the shim in 'software.coley.recaf.android.foreign'.
 // =====================================================================================================================
 
 def desktopCoreDir = file('../../recaf-core')
@@ -45,6 +45,18 @@ def desktopOnlySources = project.ext.desktopOnlySources
 configurations {
     // Holds the unmodified LL-Java-Zip jar which gets relocated onto the foreign-memory shim.
     lljzipOriginal {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+    // Procyon gets its runtime type lookup redirected, see 'retargetProcyon'.
+    procyonOriginal {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+    // Vineflower gets its lookup of a sentinel class file redirected, see 'retargetVineflower'.
+    vineflowerOriginal {
         canBeConsumed = false
         canBeResolved = true
         transitive = false
@@ -147,13 +159,20 @@ dependencies {
     api(libs.mapping.io)
     api(libs.natural.order)
     api(libs.pe)
-    api(libs.procyon)
+    procyonOriginal(libs.procyon)
+    api('org.bitbucket.mstrobel:procyon-core:' + libs.versions.procyon.get())
+    api(files(retargetedLibsDir.map { it.file('procyon-android.jar') }) {
+        builtBy 'retargetProcyon'
+    })
     api(libs.jlinker)
     api(libs.regex)
     api(libs.bundles.jasm) {
         exclude group: 'com.github.jumanji144.dex'
     }
-    api(libs.vineflower)
+    vineflowerOriginal(libs.vineflower)
+    api(files(retargetedLibsDir.map { it.file('vineflower-android.jar') }) {
+        builtBy 'retargetVineflower'
+    })
     api(libs.sourcesolver)
     api('org.slf4j:slf4j-api:2.0.17')
     api('com.google.guava:guava:33.5.0-android')
@@ -339,63 +358,146 @@ def generateBeanIndex = tasks.register('generateBeanIndex') {
 
 // ========================================== LIBRARY RETARGETING ==========================================
 
-// Relocates LL-Java-Zip's use of 'java.lang.foreign' (absent on Android) onto the shim package, and redirects
-// 'FileChannel.map(MapMode, long, long, Arena)' (also absent) to a static helper in the shim.
-tasks.register('retargetLljzip') {
-    def input = configurations.lljzipOriginal
-    def output = retargetedLibsDir.map { it.file('lljzip-android.jar') }
-    def shimInternal = foreignShimPackage.replace('.', '/')
-    inputs.files(input)
-    inputs.property('shim', shimInternal)
-    outputs.file(output)
-    doLast {
-        def remapper = new Remapper() {
-            @Override
-            String map(String internalName) {
-                return internalName.startsWith('java/lang/foreign/') ?
-                        shimInternal + '/' + internalName.substring('java/lang/foreign/'.length()) : internalName
-            }
+/**
+ * Rewrites a library jar so that it works on Android.
+ *
+ * @param input Original jar.
+ * @param output Rewritten jar.
+ * @param rules Map with the optional keys:
+ *   'classes'   - Map of internal class name (or package prefix ending in '/') to its replacement.
+ *   'calls'     - List of [owner, name, descriptorContains, onlyInClass (nullable), targetOwner, targetName].
+ *                 Matching invocations become static calls to the target. For instance calls the receiver
+ *                 becomes the first argument of the target.
+ *   'drop'      - List of entry names to leave out of the output.
+ */
+def retargetJar = { File input, File output, Map rules ->
+    Map<String, String> classRules = (rules.classes ?: [:]) as Map<String, String>
+    List<List<String>> callRules = (rules.calls ?: []) as List<List<String>>
+    Set<String> dropped = ((rules.drop ?: []) as List<String>) as Set<String>
+    def remapper = new Remapper() {
+        @Override
+        String map(String internalName) {
+            String exact = classRules.get(internalName)
+            if (exact != null) return exact
+            for (Map.Entry<String, String> rule : classRules.entrySet())
+                if (rule.key.endsWith('/') && internalName.startsWith(rule.key))
+                    return rule.value + internalName.substring(rule.key.length())
+            return internalName
         }
-        File outFile = output.get().asFile
-        outFile.parentFile.mkdirs()
-        new JarOutputStream(new FileOutputStream(outFile)).withCloseable { JarOutputStream jos ->
-            new JarFile(input.singleFile).withCloseable { JarFile jar ->
-                jar.entries().each { JarEntry entry ->
-                    if (entry.directory || entry.name == 'module-info.class' || entry.name.startsWith('META-INF/versions/'))
-                        return
-                    byte[] bytes = jar.getInputStream(entry).bytes
-                    if (entry.name.endsWith('.class')) {
-                        ClassReader reader = new ClassReader(bytes)
-                        ClassWriter writer = new ClassWriter(0)
-                        ClassVisitor redirect = new ClassVisitor(Opcodes.ASM9, new ClassRemapper(writer, remapper)) {
-                            @Override
-                            MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
-                                MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions)
-                                return new MethodVisitor(Opcodes.ASM9, mv) {
-                                    @Override
-                                    void visitMethodInsn(int opcode, String owner, String mName, String mDesc, boolean itf) {
-                                        if (owner == 'java/nio/channels/FileChannel' && mName == 'map'
-                                                && mDesc.contains('Ljava/lang/foreign/Arena;')) {
-                                            // Instance call -> static helper taking the channel as first argument.
-                                            super.visitMethodInsn(Opcodes.INVOKESTATIC, 'java/lang/foreign/ForeignSupport', 'map',
-                                                    '(Ljava/nio/channels/FileChannel;' + mDesc.substring(1), false)
-                                        } else {
-                                            super.visitMethodInsn(opcode, owner, mName, mDesc, itf)
-                                        }
+    }
+    output.parentFile.mkdirs()
+    new JarOutputStream(new FileOutputStream(output)).withCloseable { JarOutputStream jos ->
+        new JarFile(input).withCloseable { JarFile jar ->
+            jar.entries().each { JarEntry entry ->
+                if (entry.directory || entry.name == 'module-info.class' || entry.name.startsWith('META-INF/versions/')
+                        || dropped.contains(entry.name))
+                    return
+                byte[] bytes = jar.getInputStream(entry).bytes
+                if (entry.name.endsWith('.class')) {
+                    String className = entry.name.substring(0, entry.name.length() - 6)
+                    ClassReader reader = new ClassReader(bytes)
+                    ClassWriter writer = new ClassWriter(0)
+                    // Calls are redirected before names are remapped, so rules are written against the original names.
+                    ClassVisitor redirect = new ClassVisitor(Opcodes.ASM9, new ClassRemapper(writer, remapper)) {
+                        @Override
+                        MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                            MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions)
+                            return new MethodVisitor(Opcodes.ASM9, mv) {
+                                @Override
+                                void visitMethodInsn(int opcode, String owner, String mName, String mDesc, boolean itf) {
+                                    List<String> rule = callRules.find { r ->
+                                        r[0] == owner && r[1] == mName && mDesc.contains(r[2]) && (r[3] == null || r[3] == className)
+                                    }
+                                    if (rule != null) {
+                                        String targetDesc = opcode == Opcodes.INVOKESTATIC ? mDesc : '(L' + owner + ';' + mDesc.substring(1)
+                                        super.visitMethodInsn(Opcodes.INVOKESTATIC, rule[4], rule[5], targetDesc, false)
+                                    } else {
+                                        super.visitMethodInsn(opcode, owner, mName, mDesc, itf)
                                     }
                                 }
                             }
                         }
-                        reader.accept(redirect, 0)
-                        bytes = writer.toByteArray()
                     }
-                    jos.putNextEntry(new JarEntry(entry.name))
-                    jos.write(bytes)
-                    jos.closeEntry()
+                    reader.accept(redirect, 0)
+                    bytes = writer.toByteArray()
                 }
+                jos.putNextEntry(new JarEntry(entry.name))
+                jos.write(bytes)
+                jos.closeEntry()
             }
         }
     }
+}
+
+def shimInternal = foreignShimPackage.replace('.', '/')
+def compatInternal = 'software/coley/recaf/android/compat'
+
+// LL-Java-Zip models archive content with 'java.lang.foreign' (absent on Android) and has a fast inflater path built on
+// JDK internals (also absent). Both are moved onto portable equivalents.
+tasks.register('retargetLljzip') {
+    def input = configurations.lljzipOriginal
+    def output = retargetedLibsDir.map { it.file('lljzip-android.jar') }
+    def compression = 'software/coley/lljzip/format/compression/'
+    def rules = [
+            classes: [
+                    'java/lang/foreign/'                          : shimInternal + '/',
+                    // The 'unsafe' decompressor pokes at java.util.zip.Inflater internals. The plain one behaves the same.
+                    (compression + 'UnsafeDeflateDecompressor'): compression + 'DeflateDecompressor',
+            ],
+            calls  : [
+                    // FileChannel.map(MapMode, long, long, Arena) does not exist on Android.
+                    ['java/nio/channels/FileChannel', 'map', 'Ljava/lang/foreign/Arena;', null, 'java/lang/foreign/ForeignSupport', 'map'],
+            ],
+            drop   : [
+                    compression + 'UnsafeDeflateDecompressor.class',
+                    compression + 'DeflateEntry.class',
+                    'software/coley/lljzip/util/InflaterHackery.class',
+                    'software/coley/lljzip/util/UnsafeUtil.class',
+            ],
+    ]
+    inputs.files(input)
+    inputs.property('rules', rules.toString())
+    outputs.file(output)
+    doLast { retargetJar(input.singleFile, output.get().asFile, rules) }
+}
+
+// Procyon bootstraps its type system by reading 'java/lang/Object.class' and friends from the system class loader.
+// Android has no class files for its runtime, so that lookup is pointed at a loader which synthesizes them.
+tasks.register('retargetProcyon') {
+    def input = configurations.procyonOriginal
+    def output = retargetedLibsDir.map { it.file('procyon-android.jar') }
+    def rules = [
+            calls: [
+                    ['java/lang/ClassLoader', 'getSystemClassLoader', '()', 'com/strobel/assembler/metadata/ClasspathTypeLoader',
+                     compatInternal + '/RuntimeResourceLoader', 'get'],
+            ],
+    ]
+    inputs.files(input)
+    inputs.property('rules', rules.toString())
+    outputs.file(output)
+    doLast { retargetJar(input.singleFile, output.get().asFile, rules) }
+}
+
+// Vineflower parses its own class file as a placeholder class, and bundles plugins as nested jars of JVM bytecode.
+// Android offers class files for neither lookup, and cannot load the plugins (desktop Recaf strips them as well).
+tasks.register('retargetVineflower') {
+    def input = configurations.vineflowerOriginal
+    def output = retargetedLibsDir.map { it.file('vineflower-android.jar') }
+    def rules = [
+            calls: [
+                    ['java/lang/Class', 'getResourceAsStream', '(Ljava/lang/String;)', 'org/jetbrains/java/decompiler/struct/StructContext',
+                     compatInternal + '/RuntimeResourceLoader', 'classResource'],
+            ],
+            drop : [
+                    'META-INF/plugins/vineflower-idea-not-null.jar',
+                    'META-INF/plugins/vineflower-kotlin-0.1.0.jar',
+                    'META-INF/plugins/vineflower-variable-renaming.jar',
+            ],
+    ]
+    inputs.files(input)
+    inputs.property('rules', rules.toString())
+    outputs.file(output)
+    doLast { retargetJar(input.singleFile, output.get().asFile, rules) }
 }
 
 // Merges JvmDowngrader's artifacts into a single jar, keeping the first copy of each duplicated entry.

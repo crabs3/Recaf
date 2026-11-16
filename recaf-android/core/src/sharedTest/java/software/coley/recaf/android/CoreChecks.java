@@ -185,8 +185,15 @@ public final class CoreChecks {
 		if (t == null)
 			return "<no exception>";
 		StringBuilder sb = new StringBuilder();
-		for (Throwable c = t; c != null; c = c.getCause())
+		Throwable root = t;
+		for (Throwable c = t; c != null; c = c.getCause()) {
 			sb.append(c).append(" <- ");
+			root = c;
+		}
+		// The frames of the root cause say where on this runtime things went wrong.
+		StackTraceElement[] trace = root.getStackTrace();
+		for (int i = 0; i < Math.min(12, trace.length); i++)
+			sb.append("\n    at ").append(trace[i]);
 		return sb.toString();
 	}
 

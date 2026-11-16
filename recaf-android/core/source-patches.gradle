@@ -96,6 +96,12 @@ ext.fileSourcePatches = [
         [file: 'software/coley/recaf/analytics/logging/InterceptingLogger.java',
          find: 'replaceFirst("\\\\{}"', replace: 'replaceFirst("\\\\{\\\\}"'],
 
+        // Vineflower would otherwise open the JDK's 'jrt:' runtime image, a file system Android does not have.
+        // Runtime types still reach it through Recaf's own library source.
+        [file: 'software/coley/recaf/services/decompile/vineflower/VineflowerConfig.java',
+         find: 'properties.put("kt-enable", "0");',
+         replace: 'properties.put("kt-enable", "0");\n\t\tproperties.put("include-runtime", "0");'],
+
         // No remote VM (attach API) resources on Android.
         [file: 'software/coley/recaf/services/comment/CommentKey.java',
          find: 'import software.coley.recaf.workspace.model.resource.WorkspaceRemoteVmResource;', replace: ''],

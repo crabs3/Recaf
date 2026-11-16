@@ -25,6 +25,7 @@ public final class StandardTools {
 		return List.of(
 				new WorkspaceTools(context),
 				new ClassTools(context),
+				new ScriptTools(context),
 				new FindingTools(context)
 		);
 	}

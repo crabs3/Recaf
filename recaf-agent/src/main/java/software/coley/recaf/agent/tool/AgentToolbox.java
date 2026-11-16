@@ -17,6 +17,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * The set of tools available to agents, and the single entry point through which they are called.
@@ -36,6 +38,11 @@ public final class AgentToolbox {
 	private static final Logger logger = Logging.get(AgentToolbox.class);
 	private final Map<String, AgentTool> tools = new LinkedHashMap<>();
 	private final List<ToolCallListener> listeners = new CopyOnWriteArrayList<>();
+	/**
+	 * Tools can be called from several threads at once, for instance by an MCP client issuing parallel requests
+	 * while the embedded agent is working. Reads may overlap, anything that modifies the workspace runs alone.
+	 */
+	private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 	private final ToolContext context;
 
 	/**
@@ -44,6 +51,7 @@ public final class AgentToolbox {
 	 */
 	public AgentToolbox(@Nonnull ToolContext context) {
 		this.context = context;
+		context.attach(this);
 	}
 
 	/**
@@ -144,12 +152,22 @@ public final class AgentToolbox {
 		if (tool == null)
 			return ToolResult.error("Unknown tool '" + name + "'. Available tools: " + String.join(", ", tools.keySet()));
 
+		// Tools may call other tools (scripts do), which the reentrant lock allows as long as a read-only tool does
+		// not try to start a mutating one. That case is reported instead of deadlocking.
+		if (!tool.readOnly() && lock.getReadHoldCount() > 0 && !lock.isWriteLockedByCurrentThread())
+			return ToolResult.error("The mutating tool '" + name + "' cannot be called from within a read-only tool call.");
+
 		ToolArgs args = new ToolArgs(arguments);
+		String invalid = ToolInputValidator.validate(tool.inputSchema(), args.json());
+		if (invalid != null)
+			return ToolResult.error("Invalid arguments for '" + name + "': " + invalid);
 		for (ToolCallListener listener : listeners)
 			notifyQuietly(() -> listener.onToolCall(tool, args));
 
 		long start = System.currentTimeMillis();
 		ToolResult result;
+		Lock callLock = tool.readOnly() ? lock.readLock() : lock.writeLock();
+		callLock.lock();
 		try {
 			result = ToolResult.ok(bound(tool.execute(args)));
 		} catch (ToolException ex) {
@@ -161,6 +179,8 @@ public final class AgentToolbox {
 			// Unexpected failures still go back to the model, which can often route around them.
 			logger.warn("Tool '{}' failed unexpectedly", name, t);
 			result = ToolResult.error(describe(t));
+		} finally {
+			callLock.unlock();
 		}
 
 		long duration = System.currentTimeMillis() - start;
